@@ -19,10 +19,11 @@ from datetime import datetime
 # ============================================================
 # CONFIG — FILL THESE IN
 # ============================================================
-SS_USERNAME     = "YOUR_SS_USERNAME"        # S&S Activewear username
-SS_API_KEY      = "YOUR_SS_API_KEY"         # S&S Activewear API key
-SHOPIFY_STORE   = "summitstandardco.myshopify.com"
-SHOPIFY_TOKEN   = "YOUR_SHOPIFY_ADMIN_TOKEN" # Admin API access token
+import os
+SS_USERNAME     = os.environ.get("SS_USERNAME", "YOUR_SS_USERNAME")
+SS_API_KEY      = os.environ.get("SS_API_KEY", "YOUR_SS_API_KEY")
+SHOPIFY_STORE   = os.environ.get("SHOPIFY_STORE", "summitstandardco.myshopify.com")
+SHOPIFY_TOKEN   = os.environ.get("SHOPIFY_TOKEN", "YOUR_SHOPIFY_ADMIN_TOKEN")
 
 # Shopify collection IDs for embroidery catalog
 # We'll look these up automatically — leave as empty dict for first run
