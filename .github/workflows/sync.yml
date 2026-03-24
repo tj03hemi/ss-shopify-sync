@@ -1,0 +1,33 @@
+name: S&S Activewear to Shopify Sync
+
+on:
+  # Run automatically every day at 6:00 AM Arizona time (1:00 PM UTC)
+  schedule:
+    - cron: '0 13 * * *'
+
+  # Also allow manual trigger from GitHub Actions tab
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run S&S to Shopify sync
+        env:
+          SS_USERNAME: ${{ secrets.SS_USERNAME }}
+          SS_API_KEY: ${{ secrets.SS_API_KEY }}
+          SHOPIFY_STORE: ${{ secrets.SHOPIFY_STORE }}
+          SHOPIFY_TOKEN: ${{ secrets.SHOPIFY_TOKEN }}
+        run: python ss_shopify_sync.py
