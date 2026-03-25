@@ -1,11 +1,8 @@
 name: S&S Activewear to Shopify Sync
 
 on:
-  # Run automatically every day at 6:00 AM Arizona time (1:00 PM UTC)
   schedule:
     - cron: '0 13 * * *'
-
-  # Also allow manual trigger from GitHub Actions tab
   workflow_dispatch:
 
 jobs:
@@ -24,10 +21,26 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
+      - name: Debug — check which secrets are set
+        env:
+          SS_USERNAME:            ${{ secrets.SS_USERNAME }}
+          SS_API_KEY:             ${{ secrets.SS_API_KEY }}
+          SHOPIFY_STORE:          ${{ secrets.SHOPIFY_STORE }}
+          SHOPIFY_CLIENT_ID:      ${{ secrets.SHOPIFY_CLIENT_ID }}
+          SHOPIFY_CLIENT_SECRET:  ${{ secrets.SHOPIFY_CLIENT_SECRET }}
+        run: |
+          echo "SS_USERNAME set:           $([ -n "$SS_USERNAME" ] && echo YES || echo NO)"
+          echo "SS_API_KEY set:            $([ -n "$SS_API_KEY" ] && echo YES || echo NO)"
+          echo "SHOPIFY_STORE set:         $([ -n "$SHOPIFY_STORE" ] && echo YES || echo NO)"
+          echo "SHOPIFY_CLIENT_ID set:     $([ -n "$SHOPIFY_CLIENT_ID" ] && echo YES || echo NO)"
+          echo "SHOPIFY_CLIENT_SECRET set: $([ -n "$SHOPIFY_CLIENT_SECRET" ] && echo YES || echo NO)"
+          echo "SHOPIFY_STORE value:       $SHOPIFY_STORE"
+
       - name: Run S&S to Shopify sync
         env:
-          SS_USERNAME: ${{ secrets.SS_USERNAME }}
-          SS_API_KEY: ${{ secrets.SS_API_KEY }}
-          SHOPIFY_STORE: ${{ secrets.SHOPIFY_STORE }}
-          SHOPIFY_TOKEN: ${{ secrets.SHOPIFY_TOKEN }}
+          SS_USERNAME:            ${{ secrets.SS_USERNAME }}
+          SS_API_KEY:             ${{ secrets.SS_API_KEY }}
+          SHOPIFY_STORE:          ${{ secrets.SHOPIFY_STORE }}
+          SHOPIFY_CLIENT_ID:      ${{ secrets.SHOPIFY_CLIENT_ID }}
+          SHOPIFY_CLIENT_SECRET:  ${{ secrets.SHOPIFY_CLIENT_SECRET }}
         run: python ss_shopify_sync.py
