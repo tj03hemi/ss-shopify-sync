@@ -178,6 +178,88 @@ def get_styles_for_category(category_tag, max_per_brand=4, max_total=30):
 
     return results[:max_total]
 
+# Shopify taxonomy IDs confirmed from GraphQL API
+# Maps our category tags to Shopify taxonomy GIDs
+# Using most appropriate leaf category for each
+TAXONOMY_MAP = {
+    "hats":      "gid://shopify/TaxonomyCategory/aa-2-17-14",  # Trucker Hats (broadest hat type)
+    "polos":     "gid://shopify/TaxonomyCategory/aa-1-13-6",   # Polos
+    "tshirts":   "gid://shopify/TaxonomyCategory/aa-1-13-8",   # T-Shirts
+    "fleece":    "gid://shopify/TaxonomyCategory/aa-1-13-13",  # Hoodies (covers hoodies + sweatshirts)
+    "outerwear": "gid://shopify/TaxonomyCategory/aa-1-1-8-2",  # Jackets
+    "woven":     "gid://shopify/TaxonomyCategory/aa-1-13-5",   # Overshirts/Wovens
+    "bags":      "gid://shopify/TaxonomyCategory/lb-13",       # Tote Bags
+    "activewear":"gid://shopify/TaxonomyCategory/aa-1-1-8-2",  # Activewear Jackets
+}
+
+# More specific hat taxonomy IDs based on S&S baseCategory
+HAT_TAXONOMY_MAP = {
+    "snapback":   "gid://shopify/TaxonomyCategory/aa-2-17-10",  # Snapback Caps
+    "trucker":    "gid://shopify/TaxonomyCategory/aa-2-17-14",  # Trucker Hats
+    "baseball":   "gid://shopify/TaxonomyCategory/aa-2-17-1",   # Baseball Caps
+    "fitted":     "gid://shopify/TaxonomyCategory/aa-2-17-1",   # Baseball Caps (closest)
+    "dad":        "gid://shopify/TaxonomyCategory/aa-2-17-1",   # Baseball Caps (closest)
+    "default":    "gid://shopify/TaxonomyCategory/aa-2-17-14",  # Trucker Hats (default)
+}
+
+def get_hat_taxonomy(style):
+    """Get more specific hat taxonomy based on style name or title."""
+    title = (style.get("title","") + " " + style.get("styleName","")).lower()
+    if "snapback" in title: return HAT_TAXONOMY_MAP["snapback"]
+    if "trucker" in title:  return HAT_TAXONOMY_MAP["trucker"]
+    if "fitted" in title:   return HAT_TAXONOMY_MAP["fitted"]
+    if "dad" in title or "dad cap" in title: return HAT_TAXONOMY_MAP["dad"]
+    return HAT_TAXONOMY_MAP["default"]
+
+def set_product_category(product_id, taxonomy_gid, token):
+    """Set Shopify product category via GraphQL."""
+    url = f"https://{SHOPIFY_STORE}/admin/api/2024-10/graphql.json"
+    mutation = """
+    mutation setProductCategory($input: ProductInput!) {
+      productUpdate(input: $input) {
+        product {
+          id
+          category {
+            name
+            fullName
+          }
+        }
+        userErrors {
+          field
+          message
+        }
+      }
+    }
+    """
+    # Convert REST product ID to GraphQL GID
+    gid = f"gid://shopify/Product/{product_id}"
+    variables = {
+        "input": {
+            "id": gid,
+            "category": taxonomy_gid
+        }
+    }
+    try:
+        r = requests.post(url,
+            headers={"X-Shopify-Access-Token": token,
+                     "Content-Type": "application/json"},
+            json={"query": mutation, "variables": variables},
+            timeout=30)
+        if r.status_code == 200:
+            data = r.json()
+            errors = data.get("data",{}).get("productUpdate",{}).get("userErrors",[])
+            if errors:
+                print(f"       ⚠️  Category error: {errors[0].get('message','')}")
+                return False
+            cat = data.get("data",{}).get("productUpdate",{}).get("product",{}).get("category",{})
+            if cat:
+                print(f"       🏷️  Category set: {cat.get('name','')}")
+                return True
+        return False
+    except Exception as e:
+        print(f"       ❌ Category GraphQL error: {e}")
+        return False
+
 def get_gender_tag(style):
     """Check style categories against gender category IDs."""
     cats = str(style.get("categories", ""))
@@ -515,6 +597,10 @@ def run():
                     pid = created["id"]
                     print(f"     ✅ Created as DRAFT (ID: {pid})")
                     assign_color_images(created, token)
+                    # Set Shopify product category via GraphQL
+                    tax_gid = get_hat_taxonomy(style) if cat_tag == "hats" else TAXONOMY_MAP.get(cat_tag,"")
+                    if tax_gid:
+                        set_product_category(pid, tax_gid, token)
                     # Validate product belongs in this collection
                     # before assigning — prevents mismatches
                     base_cat = style.get("baseCategory","").lower()
