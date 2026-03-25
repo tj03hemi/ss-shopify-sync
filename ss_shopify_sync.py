@@ -21,7 +21,7 @@ SS_IMG  = "https://www.ssactivewear.com/"
 
 # Max styles to import per category ID
 # Start at 8 for first run — increase later for full catalog
-MAX_PER_CATEGORY = 30
+MAX_PER_CATEGORY = 8
 
 # ── Category ID → Shopify collection mapping ──────────────────
 # S&S Category IDs confirmed from /v2/categories/ API
@@ -89,14 +89,94 @@ def ss_get(path, params=None):
         print(f"    ❌ S&S error: {e}")
         return None
 
-def get_styles_by_category(category_id, max_results=8):
-    """Fetch styles by S&S category ID — most reliable method."""
-    r = ss_get("styles/", params={"categoryid": category_id})
-    if r and r.status_code == 200:
+# Map our category tags to S&S baseCategory values for client-side filtering
+BASE_CATEGORY_MAP = {
+    "hats":      ["Hats", "Headwear", "Caps"],
+    "polos":     ["Polos", "Polos & Knits", "Knits & Layering"],
+    "tshirts":   ["T-Shirts", "Tees"],
+    "fleece":    ["Sweatshirts & Fleece", "Fleece", "Sweatshirts"],
+    "outerwear": ["Outerwear", "Jackets", "Vests"],
+    "woven":     ["Woven Shirts", "Dress Shirts", "Shirts"],
+    "bags":      ["Bags", "Totes", "Accessories"],
+    "activewear":["Activewear", "Performance"],
+}
+
+# Verified S&S brands that carry each category
+BRAND_CATEGORY_MAP = {
+    "hats": [
+        "Richardson", "Flexfit", "Sportsman", "YP Classics",
+        "Imperial", "The Game", "LEGACY", "Outdoor Cap",
+        "Top of the World", "CAP AMERICA", "47 Brand",
+        "Adams Headwear", "Atlantis Headwear", "Valucap", "Pukka",
+    ],
+    "polos": [
+        "Gildan", "BELLA + CANVAS", "Hanes", "JERZEES",
+        "Columbia", "Badger", "Team 365", "CORE365",
+        "Devon & Jones", "Harriton",
+    ],
+    "tshirts": [
+        "Gildan", "BELLA + CANVAS", "Next Level", "Comfort Colors",
+        "Hanes", "Independent Trading Co.", "Bayside", "LAT",
+        "Tultex", "Authentic Pigment",
+    ],
+    "fleece": [
+        "Gildan", "Independent Trading Co.", "JERZEES", "Champion",
+        "Columbia", "North End", "CORE365",
+    ],
+    "outerwear": [
+        "Columbia", "North End", "Harriton", "DRI DUCK",
+        "Weatherproof", "Adidas", "Under Armour", "Spyder",
+    ],
+    "woven": [
+        "Columbia", "Harriton", "Devon & Jones",
+        "Red Kap", "Dickies",
+    ],
+    "bags": [
+        "Liberty Bags", "BAGedge", "OAD", "Q-Tees", "Big Accessories",
+    ],
+    "activewear": [
+        "Badger", "Augusta Sportswear", "Team 365",
+        "Under Armour", "Adidas", "Champion",
+    ],
+}
+
+def get_styles_for_category(category_tag, max_per_brand=4, max_total=30):
+    """
+    Fetch styles by searching each brand that carries this category.
+    Filters results by baseCategory to ensure correct products.
+    """
+    brands = BRAND_CATEGORY_MAP.get(category_tag, [])
+    base_cats = BASE_CATEGORY_MAP.get(category_tag, [])
+    results = []
+    seen_ids = set()
+
+    for brand in brands:
+        if len(results) >= max_total:
+            break
+        r = ss_get("styles/", params={"search": brand})
+        if not r or r.status_code != 200:
+            continue
         data = r.json()
-        if isinstance(data, list):
-            return data[:max_results]
-    return []
+        if not isinstance(data, list):
+            continue
+
+        # Filter to styles whose baseCategory matches this category
+        matched = []
+        for style in data:
+            sid = style.get("styleID")
+            if sid in seen_ids:
+                continue
+            base = style.get("baseCategory", "")
+            # Accept if baseCategory matches OR if no filter specified
+            if not base_cats or any(bc.lower() in base.lower() or base.lower() in bc.lower()
+                                    for bc in base_cats):
+                matched.append(style)
+                seen_ids.add(sid)
+
+        results.extend(matched[:max_per_brand])
+        time.sleep(0.5)  # respect rate limit between brand searches
+
+    return results[:max_total]
 
 def get_gender_tag(style):
     """Check style categories against gender category IDs."""
@@ -114,9 +194,12 @@ def get_products(style_id):
     return []
 
 def get_specs(style_id):
-    r = ss_get("specs/", params={"styleid": style_id})
+    r = ss_get(f"specs/?style={style_id}", params=None)
     if r and r.status_code == 200:
-        return r.json()
+        data = r.json()
+        # Filter to only specs for this specific style
+        if isinstance(data, list):
+            return [s for s in data if str(s.get("styleID","")) == str(style_id)]
     return []
 
 def img_url(path, size="fl"):
@@ -194,11 +277,24 @@ def build_payload(style, products, specs, category_tag, collection_handle):
 <a href="/pages/custom-orders">Request a quote →</a></em>
 </p></div>"""
 
+    # Map category tags to Shopify/Google taxonomy IDs
+    shopify_category_map = {
+        "hats":      "Apparel & Accessories > Clothing Accessories > Hats",
+        "polos":     "Apparel & Accessories > Clothing > Shirts & Tops",
+        "tshirts":   "Apparel & Accessories > Clothing > Shirts & Tops",
+        "fleece":    "Apparel & Accessories > Clothing > Outerwear",
+        "outerwear": "Apparel & Accessories > Clothing > Outerwear",
+        "woven":     "Apparel & Accessories > Clothing > Shirts & Tops",
+        "bags":      "Apparel & Accessories > Handbags, Wallets & Cases",
+        "activewear":"Apparel & Accessories > Clothing > Activewear",
+    }
+    shopify_category = shopify_category_map.get(category_tag, "Apparel & Accessories > Clothing")
+
     return {
         "title": title,
         "body_html": body,
         "vendor": brand,
-        "product_type": category,
+        "product_type": shopify_category,
         "status": "draft",
         "published": False,
         "tags": f"embroidery-catalog,{safe_brand},{sname.lower()},custom-embroidery,quote-only,needs-review,{category_tag},{gender_tag}",
@@ -364,15 +460,23 @@ def run():
     stats = {"created": 0, "updated": 0, "skipped": 0, "errors": 0}
     seen_style_ids = set()
 
+    # Deduplicate CATEGORY_MAP to unique category tags
+    seen_tags = set()
+    unique_categories = []
     for cat_id, cat_name, col_handle, cat_tag in CATEGORY_MAP:
-        print(f"\n{'═'*55}")
-        print(f"📂 Category: {cat_name} (ID: {cat_id}) → {col_handle}")
+        if cat_tag not in seen_tags:
+            seen_tags.add(cat_tag)
+            unique_categories.append((cat_tag, col_handle))
 
-        styles = get_styles_by_category(cat_id, MAX_PER_CATEGORY)
+    for cat_tag, col_handle in unique_categories:
+        print(f"\n{'═'*55}")
+        print(f"📂 Category: {cat_tag} → {col_handle}")
+
+        styles = get_styles_for_category(cat_tag, max_per_brand=4, max_total=MAX_PER_CATEGORY)
         if not styles:
-            print(f"  ⚠️  No styles found for category {cat_id}")
+            print(f"  ⚠️  No styles found for: {cat_tag}")
             continue
-        print(f"  Found {len(styles)} styles")
+        print(f"  Found {len(styles)} styles across {len(BRAND_CATEGORY_MAP.get(cat_tag,[]))} brands")
 
         for style in styles:
             style_id   = style.get("styleID")
@@ -411,12 +515,30 @@ def run():
                     pid = created["id"]
                     print(f"     ✅ Created as DRAFT (ID: {pid})")
                     assign_color_images(created, token)
-                    # Auto-assign to collection
+                    # Validate product belongs in this collection
+                    # before assigning — prevents mismatches
+                    base_cat = style.get("baseCategory","").lower()
+                    expected = {
+                        "embroidery-caps-hats":          ["hats","headwear","caps"],
+                        "embroidery-polos-knits":         ["polo","polos","knits","shirts"],
+                        "embroidery-t-shirts":            ["t-shirts","tees","shirts"],
+                        "embroidery-sweatshirts-fleece":  ["sweatshirts","fleece","hoodies","sweaters"],
+                        "embroidery-jackets-outerwear":   ["jackets","outerwear","vests","coats"],
+                        "embroidery-woven-dress-shirts":  ["woven","dress shirts","shirts"],
+                        "embroidery-bags-totes":          ["bags","totes","accessories"],
+                    }
+                    expected_cats = expected.get(col_handle, [])
+                    cat_ok = not expected_cats or any(k in base_cat for k in expected_cats)
+
                     cid = collections.get(col_handle)
-                    if cid:
+                    if cid and cat_ok:
                         ok = add_to_collection(pid, cid, token)
                         if ok:
                             print(f"     📁 Added to: {col_handle}")
+                        else:
+                            print(f"     ⚠️  Could not add to collection")
+                    elif not cat_ok:
+                        print(f"     ⚠️  Category mismatch — baseCategory='{style.get('baseCategory')}' doesn't match '{col_handle}' — skipping collection assignment")
                     stats["created"] += 1
                 else:
                     stats["errors"] += 1
