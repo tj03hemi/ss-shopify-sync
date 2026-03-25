@@ -11,7 +11,7 @@ from datetime import datetime
 # ── Credentials from GitHub Secrets ──────────────────────────
 SS_USERNAME      = os.environ.get("SS_USERNAME", "")
 SS_API_KEY       = os.environ.get("SS_API_KEY", "")
-SHOPIFY_STORE = os.environ.get("SHOPIFY_STORE", "summit-standard-co.myshopify.com")
+SHOPIFY_STORE    = os.environ.get("SHOPIFY_STORE", "summitstandardco.myshopify.com")
 SHOPIFY_CLIENT_ID     = os.environ.get("SHOPIFY_CLIENT_ID", "")
 SHOPIFY_CLIENT_SECRET = os.environ.get("SHOPIFY_CLIENT_SECRET", "")
 
@@ -21,12 +21,12 @@ SS_IMG   = "https://www.ssactivewear.com/"
 # ── Styles to import ─────────────────────────────────────────
 STYLES_TO_IMPORT = [
     ("Richardson 112",       "embroidery-caps-hats",          "Richardson 112 Snapback Trucker Hat"),
-    ("Port Authority K500",  "embroidery-polos-knits",         "Port Authority Silk Touch Polo"),
+    "K500",  "embroidery-polos-knits",         "Port Authority Silk Touch Polo"),
     ("Gildan 18500",         "embroidery-sweatshirts-fleece",  "Gildan Heavy Blend Hoodie"),
-    ("Port Company PC61",    "embroidery-t-shirts",            "Port & Company Essential Tee"),
-    ("Port Authority J317",  "embroidery-jackets-outerwear",   "Port Authority Core Soft Shell Jacket"),
-    ("Port Authority S608",  "embroidery-woven-dress-shirts",  "Port Authority Easy Care Shirt"),
-    ("Port Authority BG615", "embroidery-bags-totes",          "Port Authority Core Tote Bag"),
+    "PC61",    "embroidery-t-shirts",            "Port & Company Essential Tee"),
+    "J317",  "embroidery-jackets-outerwear",   "Port Authority Core Soft Shell Jacket"),
+    "S608",  "embroidery-woven-dress-shirts",  "Port Authority Easy Care Shirt"),
+    "BG615", "embroidery-bags-totes",          "Port Authority Core Tote Bag"),
 ]
 
 # ── Get Shopify Access Token via Client Credentials Grant ─────
@@ -70,17 +70,23 @@ def ss_get(path, params=None):
         return None
 
 def get_style(identifier):
+    # Try direct path first (works for "BrandName StyleName")
     enc = requests.utils.quote(identifier)
     r = ss_get(f"styles/{enc}")
     if r and r.status_code == 200:
         d = r.json()
         return d[0] if isinstance(d, list) and d else None
-    # Fallback to search
-    r2 = ss_get("styles/", params={"search": identifier})
+    # Try partnumber param (works for style numbers like K500, PC61)
+    r2 = ss_get("styles/", params={"partnumber": identifier})
     if r2 and r2.status_code == 200:
         d = r2.json()
         return d[0] if isinstance(d, list) and d else None
-    print(f"    ⚠️  Style not found: {r.status_code if r else 'err'} {r.text[:200] if r else ''}")
+    # Try search as last resort
+    r3 = ss_get("styles/", params={"search": identifier})
+    if r3 and r3.status_code == 200:
+        d = r3.json()
+        return d[0] if isinstance(d, list) and d else None
+    print(f"    ⚠️  Style not found for: {identifier}")
     return None
 
 def get_products(identifier):
