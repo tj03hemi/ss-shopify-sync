@@ -1,30 +1,57 @@
 """
-Summit Standard Co. — S&S Activewear to Shopify Sync v4
+Summit Standard Co. — S&S Activewear to Shopify Sync v5
+========================================================
+Updated for Shopify Dev Dashboard apps (post Jan 2026).
+Uses Client Credentials Grant to fetch access token dynamically.
+Token is fetched fresh on each run (valid 24hrs).
 """
-import os, requests, base64, time, json
+import os, requests, base64, time
 from datetime import datetime
 
-SS_USERNAME   = os.environ.get("SS_USERNAME", "")
-SS_API_KEY    = os.environ.get("SS_API_KEY", "")
-SHOPIFY_STORE = os.environ.get("SHOPIFY_STORE", "summitstandardco.myshopify.com")
-SHOPIFY_TOKEN = os.environ.get("SHOPIFY_TOKEN", "")
+# ── Credentials from GitHub Secrets ──────────────────────────
+SS_USERNAME      = os.environ.get("SS_USERNAME", "")
+SS_API_KEY       = os.environ.get("SS_API_KEY", "")
+SHOPIFY_STORE    = os.environ.get("SHOPIFY_STORE", "summitstandardco.myshopify.com")
+SHOPIFY_CLIENT_ID     = os.environ.get("SHOPIFY_CLIENT_ID", "")
+SHOPIFY_CLIENT_SECRET = os.environ.get("SHOPIFY_CLIENT_SECRET", "")
 
 SS_BASE  = "https://api.ssactivewear.com/v2"
 SS_IMG   = "https://www.ssactivewear.com/"
-SH_BASE  = f"https://{SHOPIFY_STORE}/admin/api/2024-01"
 
-# Style identifiers — using search param for better matching
+# ── Styles to import ─────────────────────────────────────────
 STYLES_TO_IMPORT = [
-    ("Richardson 112",        "embroidery-caps-hats",          "Richardson 112 Snapback Trucker Hat"),
-    ("Port Authority K500",   "embroidery-polos-knits",         "Port Authority Silk Touch Polo"),
-    ("Gildan 18500",          "embroidery-sweatshirts-fleece",  "Gildan Heavy Blend Hoodie"),
-    ("Port Company PC61",     "embroidery-t-shirts",            "Port & Company Essential Tee"),
-    ("Port Authority J317",   "embroidery-jackets-outerwear",   "Port Authority Core Soft Shell Jacket"),
-    ("Port Authority S608",   "embroidery-woven-dress-shirts",  "Port Authority Easy Care Shirt"),
-    ("Port Authority BG615",  "embroidery-bags-totes",          "Port Authority Core Tote Bag"),
+    ("Richardson 112",       "embroidery-caps-hats",          "Richardson 112 Snapback Trucker Hat"),
+    ("Port Authority K500",  "embroidery-polos-knits",         "Port Authority Silk Touch Polo"),
+    ("Gildan 18500",         "embroidery-sweatshirts-fleece",  "Gildan Heavy Blend Hoodie"),
+    ("Port Company PC61",    "embroidery-t-shirts",            "Port & Company Essential Tee"),
+    ("Port Authority J317",  "embroidery-jackets-outerwear",   "Port Authority Core Soft Shell Jacket"),
+    ("Port Authority S608",  "embroidery-woven-dress-shirts",  "Port Authority Easy Care Shirt"),
+    ("Port Authority BG615", "embroidery-bags-totes",          "Port Authority Core Tote Bag"),
 ]
 
-# ── S&S helpers ───────────────────────────────────────────────
+# ── Get Shopify Access Token via Client Credentials Grant ─────
+def get_shopify_token():
+    """Exchange Client ID + Secret for a temporary access token."""
+    shop = SHOPIFY_STORE.replace(".myshopify.com", "")
+    url  = f"https://{SHOPIFY_STORE}/admin/oauth/access_token"
+    payload = {
+        "client_id":     SHOPIFY_CLIENT_ID,
+        "client_secret": SHOPIFY_CLIENT_SECRET,
+        "grant_type":    "client_credentials",
+    }
+    try:
+        r = requests.post(url, json=payload, timeout=30)
+        if r.status_code == 200:
+            token = r.json().get("access_token", "")
+            print(f"  ✅ Shopify token obtained (starts: {token[:8]}...)")
+            return token
+        print(f"  ❌ Token request failed {r.status_code}: {r.text[:400]}")
+        return None
+    except Exception as e:
+        print(f"  ❌ Token request error: {e}")
+        return None
+
+# ── S&S API ───────────────────────────────────────────────────
 def ss_auth():
     c = base64.b64encode(f"{SS_USERNAME}:{SS_API_KEY}".encode()).decode()
     return {"Authorization": f"Basic {c}", "Accept": "application/json"}
@@ -35,7 +62,7 @@ def ss_get(path, params=None):
                          params=params, timeout=30)
         rem = int(r.headers.get("X-Rate-Limit-Remaining", 60))
         if rem < 5:
-            print(f"    ⏳ S&S rate limit low — pausing 5s")
+            print("    ⏳ S&S rate limit — pausing 5s")
             time.sleep(5)
         return r
     except Exception as e:
@@ -43,25 +70,24 @@ def ss_get(path, params=None):
         return None
 
 def get_style(identifier):
-    # Try direct path first
     enc = requests.utils.quote(identifier)
     r = ss_get(f"styles/{enc}")
     if r and r.status_code == 200:
         d = r.json()
         return d[0] if isinstance(d, list) and d else None
-    # Fall back to search
+    # Fallback to search
     r2 = ss_get("styles/", params={"search": identifier})
     if r2 and r2.status_code == 200:
         d = r2.json()
         return d[0] if isinstance(d, list) and d else None
-    print(f"    ⚠️  Style not found ({r.status_code if r else 'err'}): {r.text[:200] if r else ''}")
+    print(f"    ⚠️  Style not found: {r.status_code if r else 'err'} {r.text[:200] if r else ''}")
     return None
 
 def get_products(identifier):
     r = ss_get("products/", params={"style": identifier})
     if r and r.status_code == 200:
         return r.json()
-    print(f"    ⚠️  Products error ({r.status_code if r else 'err'})")
+    print(f"    ⚠️  Products error: {r.status_code if r else 'err'}")
     return []
 
 def get_specs(identifier):
@@ -75,89 +101,85 @@ def img_url(path):
     full = f"{SS_IMG}{path}" if not path.startswith("http") else path
     return full.replace("_fm.", "_fl.")
 
-# ── Shopify helpers ───────────────────────────────────────────
-def sh_headers():
-    return {"X-Shopify-Access-Token": SHOPIFY_TOKEN,
+# ── Shopify API ───────────────────────────────────────────────
+def make_sh_headers(token):
+    return {"X-Shopify-Access-Token": token,
             "Content-Type": "application/json"}
 
-def sh_get(path):
+def sh_get(path, token):
     try:
-        r = requests.get(f"{SH_BASE}/{path}", headers=sh_headers(), timeout=30)
+        r = requests.get(
+            f"https://{SHOPIFY_STORE}/admin/api/2024-01/{path}",
+            headers=make_sh_headers(token), timeout=30)
         return r
     except Exception as e:
         print(f"    ❌ Shopify GET error: {e}")
         return None
 
-def sh_post(path, data):
+def sh_post(path, data, token):
     try:
-        r = requests.post(f"{SH_BASE}/{path}", headers=sh_headers(),
-                          json=data, timeout=60)
+        r = requests.post(
+            f"https://{SHOPIFY_STORE}/admin/api/2024-01/{path}",
+            headers=make_sh_headers(token), json=data, timeout=60)
         return r
     except Exception as e:
         print(f"    ❌ Shopify POST error: {e}")
         return None
 
-def sh_put(path, data):
+def sh_put(path, data, token):
     try:
-        r = requests.put(f"{SH_BASE}/{path}", headers=sh_headers(),
-                         json=data, timeout=60)
+        r = requests.put(
+            f"https://{SHOPIFY_STORE}/admin/api/2024-01/{path}",
+            headers=make_sh_headers(token), json=data, timeout=60)
         return r
     except Exception as e:
         print(f"    ❌ Shopify PUT error: {e}")
         return None
 
-def test_shopify():
-    """Test Shopify connection before running sync."""
-    print("  → Testing Shopify connection...")
-    r = sh_get("shop.json")
+def test_shopify(token):
+    r = sh_get("shop.json", token)
     if r and r.status_code == 200:
         shop = r.json().get("shop", {})
-        print(f"  ✅ Connected to: {shop.get('name')} ({shop.get('domain')})")
+        print(f"  ✅ Connected: {shop.get('name')} ({shop.get('domain')})")
         return True
-    code = r.status_code if r else "no response"
-    body = r.text[:400] if r else "no response body"
-    print(f"  ❌ Shopify connection failed: {code}")
-    print(f"     {body}")
-    print(f"  ℹ️  Token starts with: {SHOPIFY_TOKEN[:8]}..." if SHOPIFY_TOKEN else "  ℹ️  Token is EMPTY")
+    print(f"  ❌ Shopify test failed {r.status_code if r else 'no resp'}: {r.text[:300] if r else ''}")
     return False
 
-def get_collections():
-    r = sh_get("custom_collections.json?limit=250")
+def get_collections(token):
+    r = sh_get("custom_collections.json?limit=250", token)
     if r and r.status_code == 200:
         cols = r.json().get("custom_collections", [])
-        print(f"  ✅ {len(cols)} collections found:")
+        print(f"  ✅ {len(cols)} collections:")
         for c in cols:
-            print(f"     handle={c['handle']}  id={c['id']}")
+            print(f"     {c['handle']}  →  ID {c['id']}")
         return {c["handle"]: c["id"] for c in cols}
-    print(f"  ❌ Collections failed: {r.status_code if r else 'no resp'}")
+    print(f"  ❌ Collections failed: {r.status_code if r else 'no resp'} {r.text[:200] if r else ''}")
     return {}
 
-def find_product(title):
-    r = sh_get(f"products.json?title={requests.utils.quote(title)}&limit=1")
+def find_product(title, token):
+    r = sh_get(f"products.json?title={requests.utils.quote(title)}&limit=1", token)
     if r and r.status_code == 200:
         p = r.json().get("products", [])
         return p[0]["id"] if p else None
     return None
 
-def create_product(data):
-    r = sh_post("products.json", {"product": data})
+def create_product(data, token):
+    r = sh_post("products.json", {"product": data}, token)
     if r and r.status_code == 201:
         return r.json().get("product", {})
-    code = r.status_code if r else "no resp"
-    body = r.text[:500] if r else "none"
-    print(f"  ❌ Create failed {code}: {body}")
+    print(f"  ❌ Create failed {r.status_code if r else 'no resp'}: {r.text[:400] if r else ''}")
     return None
 
-def update_product(pid, data):
-    r = sh_put(f"products/{pid}.json", {"product": data})
+def update_product(pid, data, token):
+    r = sh_put(f"products/{pid}.json", {"product": data}, token)
     return r and r.status_code == 200
 
-def add_to_collection(pid, cid):
+def add_to_collection(pid, cid, token):
     r = sh_post("collects.json",
-                {"collect": {"product_id": pid, "collection_id": cid}})
+                {"collect": {"product_id": pid, "collection_id": cid}}, token)
     return r and r.status_code == 201
 
-# ── Build product ─────────────────────────────────────────────
+# ── Build product payload ─────────────────────────────────────
 def build_specs_html(specs):
     if not specs: return ""
     seen = {}
@@ -166,7 +188,7 @@ def build_specs_html(specs):
         if n and n not in seen:
             seen[n] = v
     rows = "".join(f"<tr><td><strong>{k}</strong></td><td>{v}</td></tr>"
-                   for k, v in list(seen.items())[:12])
+                   for k,v in list(seen.items())[:12])
     return f'<h4>Specs</h4><table style="font-size:13px;width:100%"><tbody>{rows}</tbody></table>'
 
 def build_product(style, products, specs, custom_title):
@@ -177,7 +199,6 @@ def build_product(style, products, specs, custom_title):
     title    = custom_title or f"{brand} {sname}"
 
     variants, images, seen_colors = [], [], set()
-
     for p in products[:100]:
         color = p.get("colorName", "Default")
         size  = p.get("sizeName",  "One Size")
@@ -228,28 +249,36 @@ def build_product(style, products, specs, custom_title):
 # ── Main ──────────────────────────────────────────────────────
 def run():
     print("\n" + "="*60)
-    print("  SUMMIT STANDARD CO. — S&S TO SHOPIFY SYNC v4")
+    print("  SUMMIT STANDARD CO. — S&S TO SHOPIFY SYNC v5")
     print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("="*60)
 
-    if not SS_USERNAME or not SHOPIFY_TOKEN:
-        print("\n❌ Missing credentials — check GitHub Secrets")
-        print(f"  SS_USERNAME set:   {'YES' if SS_USERNAME else 'NO'}")
-        print(f"  SS_API_KEY set:    {'YES' if SS_API_KEY else 'NO'}")
-        print(f"  SHOPIFY_TOKEN set: {'YES' if SHOPIFY_TOKEN else 'NO'}")
-        print(f"  SHOPIFY_STORE set: {'YES' if SHOPIFY_STORE else 'NO'}")
+    # Check credentials
+    missing = []
+    if not SS_USERNAME:      missing.append("SS_USERNAME")
+    if not SS_API_KEY:       missing.append("SS_API_KEY")
+    if not SHOPIFY_CLIENT_ID:     missing.append("SHOPIFY_CLIENT_ID")
+    if not SHOPIFY_CLIENT_SECRET: missing.append("SHOPIFY_CLIENT_SECRET")
+    if missing:
+        print(f"\n❌ Missing secrets: {', '.join(missing)}")
         return
 
-    # Test Shopify first
+    # Get Shopify token
+    print("\n🔑 Getting Shopify access token...")
+    token = get_shopify_token()
+    if not token:
+        print("❌ Could not get Shopify token — check CLIENT_ID and CLIENT_SECRET secrets")
+        return
+
+    # Test connection
     print("\n🔌 Testing Shopify connection...")
-    if not test_shopify():
-        print("\n❌ Cannot connect to Shopify — stopping.")
-        print("   Check SHOPIFY_TOKEN secret — should start with shpat_")
+    if not test_shopify(token):
+        print("❌ Shopify connection failed — stopping")
         return
 
     # Get collections
     print("\n📦 Fetching collections...")
-    collections = get_collections()
+    collections = get_collections(token)
 
     stats = {"created": 0, "updated": 0, "errors": 0}
 
@@ -257,47 +286,42 @@ def run():
         print(f"\n{'─'*55}")
         print(f"🔍 {custom_title}")
 
-        # Style
         style = get_style(style_id)
         if not style:
             print("  ❌ Skipping — style not found")
             stats["errors"] += 1
             time.sleep(1)
             continue
-        print(f"  ✅ Found: {style.get('brandName')} {style.get('styleName')} — {style.get('title')}")
+        print(f"  ✅ {style.get('brandName')} {style.get('styleName')} — {style.get('title')}")
 
-        # SKUs
         products = get_products(style_id)
         print(f"  ✅ {len(products)} SKUs")
 
-        # Specs
         specs = get_specs(style_id)
         print(f"  ✅ {len(specs)} specs")
 
-        # Build
         payload = build_product(style, products, specs, custom_title)
 
-        # Create or update
-        existing = find_product(payload["title"])
+        existing = find_product(payload["title"], token)
         if existing:
-            print(f"  ↩️  Updating existing (ID: {existing})...")
-            if update_product(existing, payload):
+            print(f"  ↩️  Updating (ID: {existing})...")
+            if update_product(existing, payload, token):
                 print("  ✅ Updated")
                 stats["updated"] += 1
             else:
                 stats["errors"] += 1
         else:
             print("  → Creating...")
-            created = create_product(payload)
+            created = create_product(payload, token)
             if created:
                 pid = created["id"]
                 print(f"  ✅ Created (ID: {pid})")
                 cid = collections.get(col_handle)
                 if cid:
-                    ok = add_to_collection(pid, cid)
+                    ok = add_to_collection(pid, cid, token)
                     print(f"  📁 {'Added to' if ok else 'Failed:'} {col_handle}")
                 else:
-                    print(f"  ⚠️  Collection '{col_handle}' not found — assign manually")
+                    print(f"  ⚠️  Collection '{col_handle}' not found")
                 stats["created"] += 1
             else:
                 stats["errors"] += 1
