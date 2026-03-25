@@ -21,7 +21,7 @@ SS_IMG  = "https://www.ssactivewear.com/"
 
 # Max styles to import per category ID
 # Start at 8 for first run — increase later for full catalog
-MAX_PER_CATEGORY = 8
+MAX_PER_CATEGORY = 30
 
 # ── Category ID → Shopify collection mapping ──────────────────
 # S&S Category IDs confirmed from /v2/categories/ API
