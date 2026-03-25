@@ -11,7 +11,7 @@ from datetime import datetime
 # ── Credentials from GitHub Secrets ──────────────────────────
 SS_USERNAME      = os.environ.get("SS_USERNAME", "")
 SS_API_KEY       = os.environ.get("SS_API_KEY", "")
-SHOPIFY_STORE    = os.environ.get("SHOPIFY_STORE", "summitstandardco.myshopify.com")
+SHOPIFY_STORE = os.environ.get("SHOPIFY_STORE", "summit-standard-co.myshopify.com")
 SHOPIFY_CLIENT_ID     = os.environ.get("SHOPIFY_CLIENT_ID", "")
 SHOPIFY_CLIENT_SECRET = os.environ.get("SHOPIFY_CLIENT_SECRET", "")
 
