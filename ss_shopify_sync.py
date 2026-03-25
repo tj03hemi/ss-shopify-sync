@@ -19,14 +19,61 @@ SS_BASE  = "https://api.ssactivewear.com/v2"
 SS_IMG   = "https://www.ssactivewear.com/"
 
 # ── Styles to import ─────────────────────────────────────────
+# Format: ("BrandName StyleName", "category-tag", "Custom Title or None")
+# All products imported as DRAFT — activate manually in Shopify admin
+# Use None for title to auto-generate from S&S data
 STYLES_TO_IMPORT = [
-    ("Richardson 112",  "embroidery-caps-hats",          "Richardson 112 Snapback Trucker Hat"),
-    ("K500",            "embroidery-polos-knits",         "Port Authority Silk Touch Polo"),
-    ("Gildan 18500",    "embroidery-sweatshirts-fleece",  "Gildan Heavy Blend Hoodie"),
-    ("PC61",            "embroidery-t-shirts",            "Port & Company Essential Tee"),
-    ("J317",            "embroidery-jackets-outerwear",   "Port Authority Core Soft Shell Jacket"),
-    ("S608",            "embroidery-woven-dress-shirts",  "Port Authority Easy Care Shirt"),
-    ("BG615",           "embroidery-bags-totes",          "Port Authority Core Tote Bag"),
+
+    # ── HATS & CAPS ──────────────────────────────────────────
+    ("Richardson 112",        "hats",       None),
+    ("Richardson 112P",       "hats",       None),
+    ("Richardson 115",        "hats",       None),
+    ("Richardson 320",        "hats",       None),
+    ("Richardson 514",        "hats",       None),
+    ("Otto Cap 39-165",       "hats",       None),
+    ("Otto Cap 32-467",       "hats",       None),
+    ("Pacific Headwear 404M", "hats",       None),
+    ("Pacific Headwear 101C", "hats",       None),
+    ("Port Authority C112",   "hats",       None),
+    ("Port Authority C913",   "hats",       None),
+    ("Port Authority C828",   "hats",       None),
+
+    # ── POLOS & KNITS ────────────────────────────────────────
+    ("Port Authority K500",   "polos",      None),
+    ("Port Authority K540",   "polos",      None),
+    ("Port Authority K110",   "polos",      None),
+    ("Port Authority K864",   "polos",      None),
+    ("Gildan 64800",          "polos",      None),
+    ("Gildan 82800",          "polos",      None),
+
+    # ── T-SHIRTS ─────────────────────────────────────────────
+    ("Port and Company PC61", "tshirts",    None),
+    ("Port and Company PC54", "tshirts",    None),
+    ("Gildan 5000",           "tshirts",    None),
+    ("Gildan 64000",          "tshirts",    None),
+    ("Bella Canvas 3001",     "tshirts",    None),
+
+    # ── SWEATSHIRTS & FLEECE ─────────────────────────────────
+    ("Gildan 18500",          "fleece",     None),
+    ("Gildan 18000",          "fleece",     None),
+    ("Port and Company PC90H","fleece",     None),
+    ("Port Authority F217",   "fleece",     None),
+
+    # ── JACKETS & OUTERWEAR ──────────────────────────────────
+    ("Port Authority J317",   "outerwear",  None),
+    ("Port Authority J318",   "outerwear",  None),
+    ("Port Authority J768",   "outerwear",  None),
+    ("Port Authority J790",   "outerwear",  None),
+
+    # ── WOVEN & DRESS SHIRTS ─────────────────────────────────
+    ("Port Authority S608",   "woven",      None),
+    ("Port Authority S663",   "woven",      None),
+    ("Port Authority W960",   "woven",      None),
+
+    # ── BAGS & TOTES ─────────────────────────────────────────
+    ("Port Authority BG615",  "bags",       None),
+    ("Port Authority BG100",  "bags",       None),
+    ("Port Authority BG218",  "bags",       None),
 ]
 
 # ── Get Shopify Access Token via Client Credentials Grant ─────
@@ -70,23 +117,35 @@ def ss_get(path, params=None):
         return None
 
 def get_style(identifier):
-    # Try direct path first (works for "BrandName StyleName")
+    # Try 1: direct path e.g. "Richardson 112" or "Port Authority K500"
     enc = requests.utils.quote(identifier)
     r = ss_get(f"styles/{enc}")
     if r and r.status_code == 200:
         d = r.json()
-        return d[0] if isinstance(d, list) and d else None
-    # Try partnumber param (works for style numbers like K500, PC61)
-    r2 = ss_get("styles/", params={"partnumber": identifier})
+        if d: return d[0] if isinstance(d, list) else d
+    print(f"    → Direct path failed ({r.status_code if r else 'err'}), trying search...")
+
+    # Try 2: search param
+    r2 = ss_get("styles/", params={"search": identifier})
     if r2 and r2.status_code == 200:
         d = r2.json()
-        return d[0] if isinstance(d, list) and d else None
-    # Try search as last resort
-    r3 = ss_get("styles/", params={"search": identifier})
-    if r3 and r3.status_code == 200:
-        d = r3.json()
-        return d[0] if isinstance(d, list) and d else None
-    print(f"    ⚠️  Style not found for: {identifier}")
+        if d: return d[0] if isinstance(d, list) else d
+    print(f"    → Search failed ({r2.status_code if r2 else 'err'}), trying partnumber...")
+
+    # Try 3: extract just the style number and try partnumber param
+    # e.g. "Port Authority K500" -> "K500"
+    parts = identifier.split()
+    if parts:
+        part_num = parts[-1]  # last word is usually the style number
+        r3 = ss_get("styles/", params={"partnumber": part_num})
+        if r3 and r3.status_code == 200:
+            d = r3.json()
+            if d:
+                print(f"    → Found via partnumber: {part_num}")
+                return d[0] if isinstance(d, list) else d
+        print(f"    → Partnumber failed ({r3.status_code if r3 else 'err'})")
+
+    print(f"    ⚠️  All lookups failed for: {identifier}")
     return None
 
 def get_products(identifier):
@@ -244,9 +303,9 @@ def build_product(style, products, specs, custom_title):
         "body_html": body,
         "vendor": brand,
         "product_type": category,
-        "status": "active",
-        "published": True,
-        "tags": f"embroidery-catalog,{brand.lower().replace(' ','-').replace('&','and')},{sname.lower()},custom-embroidery,quote-only",
+        "status": "draft",
+        "published": False,
+        "tags": f"embroidery-catalog,{brand.lower().replace(' ','-').replace('&','and')},{sname.lower()},custom-embroidery,quote-only,needs-review",
         "options": [{"name": "Color"}, {"name": "Size"}],
         "variants": variants,
         "images": images[:10],
@@ -322,12 +381,8 @@ def run():
             if created:
                 pid = created["id"]
                 print(f"  ✅ Created (ID: {pid})")
-                cid = collections.get(col_handle)
-                if cid:
-                    ok = add_to_collection(pid, cid, token)
-                    print(f"  📁 {'Added to' if ok else 'Failed:'} {col_handle}")
-                else:
-                    print(f"  ⚠️  Collection '{col_handle}' not found")
+                print(f"  📋 Saved as draft — assign to collection manually in Shopify")
+                print(f"  🏷️  Tagged: embroidery-catalog, {col_handle.replace('embroidery-','')}, needs-review")
                 stats["created"] += 1
             else:
                 stats["errors"] += 1
