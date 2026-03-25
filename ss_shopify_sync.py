@@ -20,13 +20,13 @@ SS_IMG   = "https://www.ssactivewear.com/"
 
 # ── Styles to import ─────────────────────────────────────────
 STYLES_TO_IMPORT = [
-    ("Richardson 112",       "embroidery-caps-hats",          "Richardson 112 Snapback Trucker Hat"),
-    "K500",  "embroidery-polos-knits",         "Port Authority Silk Touch Polo"),
-    ("Gildan 18500",         "embroidery-sweatshirts-fleece",  "Gildan Heavy Blend Hoodie"),
-    "PC61",    "embroidery-t-shirts",            "Port & Company Essential Tee"),
-    "J317",  "embroidery-jackets-outerwear",   "Port Authority Core Soft Shell Jacket"),
-    "S608",  "embroidery-woven-dress-shirts",  "Port Authority Easy Care Shirt"),
-    "BG615", "embroidery-bags-totes",          "Port Authority Core Tote Bag"),
+    ("Richardson 112",  "embroidery-caps-hats",          "Richardson 112 Snapback Trucker Hat"),
+    ("K500",            "embroidery-polos-knits",         "Port Authority Silk Touch Polo"),
+    ("Gildan 18500",    "embroidery-sweatshirts-fleece",  "Gildan Heavy Blend Hoodie"),
+    ("PC61",            "embroidery-t-shirts",            "Port & Company Essential Tee"),
+    ("J317",            "embroidery-jackets-outerwear",   "Port Authority Core Soft Shell Jacket"),
+    ("S608",            "embroidery-woven-dress-shirts",  "Port Authority Easy Care Shirt"),
+    ("BG615",           "embroidery-bags-totes",          "Port Authority Core Tote Bag"),
 ]
 
 # ── Get Shopify Access Token via Client Credentials Grant ─────
