@@ -44,14 +44,3 @@ jobs:
           SHOPIFY_CLIENT_ID:      ${{ secrets.SHOPIFY_CLIENT_ID }}
           SHOPIFY_CLIENT_SECRET:  ${{ secrets.SHOPIFY_CLIENT_SECRET }}
         run: python check_taxonomy.py
-```
-3. Run the workflow and paste the output back here
-
----
-
-This will return the exact Shopify taxonomy GIDs for each category like:
-```
-🔍 'Snapback Caps':
-   ID: gid://shopify/TaxonomyCategory/aa-2-3-17-4
-   Full name: Apparel & Accessories > Clothing Accessories > Hats > Snapback Caps
-   Leaf: true
