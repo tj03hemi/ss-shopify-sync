@@ -43,4 +43,4 @@ jobs:
           SHOPIFY_STORE:          ${{ secrets.SHOPIFY_STORE }}
           SHOPIFY_CLIENT_ID:      ${{ secrets.SHOPIFY_CLIENT_ID }}
           SHOPIFY_CLIENT_SECRET:  ${{ secrets.SHOPIFY_CLIENT_SECRET }}
-        run: python check_categories.py
+        run: python ss_shopify_sync.py
