@@ -837,20 +837,93 @@ def create_with_retry(payload, token):
     print(f"    ❌ Create failed {r.status_code}: {r.text[:300]}")
     return None
 
-def sync_inventory(pid, skus, col_tag, token):
+def get_location_id(token):
+    """Fetch the primary Shopify location ID. Called once at startup."""
+    r = sh_get("locations.json", token)
+    if r.status_code != 200:
+        print(f"  ⚠️  Could not fetch locations (HTTP {r.status_code}): {r.text[:150]}")
+        return None
+    locations = r.json().get("locations", [])
+    if not locations:
+        print("  ⚠️  No locations found in Shopify account")
+        return None
+    location_id = locations[0]["id"]
+    print(f"  📍 Location ID: {location_id} ({locations[0].get('name', 'Primary')})")
+    return location_id
+
+def update_variant_prices(pid, skus, col_tag, token):
     """
-    Sync S&S inventory quantities to Shopify variant inventory levels.
-    Fetches the created product's variants, matches by SKU, sets qty.
+    Update price on all existing variants using correct gross margin.
+    Hats: cost / 0.70 (30% GM). All others: cost / 0.80 (20% GM).
+    Matches by SKU code between S&S data and Shopify variants.
     """
-    # Get the product's variants from Shopify
+    gm_divisor = 0.70 if col_tag == "hats" else 0.80
+
+    # Build SKU → retail price map from S&S cost data
+    ss_prices = {}
+    for sku in skus:
+        sku_code = sku.get("sku", "")
+        cost = sku.get("piecePrice") or sku.get("salePrice") or sku.get("basePrice") or 0
+        try:
+            cost = float(cost)
+        except (TypeError, ValueError):
+            cost = 0.0
+        if sku_code and cost > 0:
+            ss_prices[sku_code] = str(round(cost / gm_divisor, 2))
+
+    if not ss_prices:
+        return  # No cost data from S&S — skip silently
+
+    # Get existing variants from Shopify
     r = sh_get(f"products/{pid}/variants.json", token, params={"limit": 250})
     if r.status_code != 200:
-        print(f"    ⚠️  Could not fetch variants for inventory sync")
+        print(f"    ⚠️  Could not fetch variants for price update (HTTP {r.status_code})")
         return
 
     shopify_variants = r.json().get("variants", [])
+    updated = 0
+    for variant in shopify_variants:
+        sku_code   = variant.get("sku", "")
+        variant_id = variant.get("id")
+        new_price  = ss_prices.get(sku_code)
 
-    # Build a SKU → qty map from S&S data
+        if not new_price or not variant_id:
+            continue
+
+        # Only update if price actually changed
+        if variant.get("price") == new_price:
+            updated += 1
+            continue
+
+        r2 = sh_put(f"variants/{variant_id}.json", token, {
+            "variant": {"id": variant_id, "price": new_price}
+        })
+        if r2.status_code in (200, 201):
+            updated += 1
+        time.sleep(0.05)
+
+    print(f"    💰 Prices updated: {updated}/{len(shopify_variants)} variants")
+
+def sync_inventory(pid, skus, location_id, token):
+    """
+    Sync S&S inventory quantities to Shopify variant inventory levels.
+    location_id is fetched once at startup and passed in — not re-fetched per product.
+    """
+    if not location_id:
+        return
+
+    # Get the product variants from Shopify to get inventory_item_id per variant
+    r = sh_get(f"products/{pid}/variants.json", token, params={"limit": 250})
+    if r.status_code != 200:
+        print(f"    ⚠️  Could not fetch variants for inventory sync (HTTP {r.status_code})")
+        return
+
+    shopify_variants = r.json().get("variants", [])
+    if not shopify_variants:
+        return
+
+    # Build SKU → qty map from S&S data
+    # S&S may use qty, quantityAvailable, or inventory depending on endpoint
     ss_qty = {}
     for sku in skus:
         sku_code = sku.get("sku", "")
@@ -863,30 +936,17 @@ def sync_inventory(pid, skus, col_tag, token):
             ss_qty[sku_code] = qty
 
     if not ss_qty:
-        print(f"    ⚠️  No S&S qty data to sync")
-        return
-
-    # Get location ID (needed for inventory level updates)
-    loc_r = sh_get("locations.json", token)
-    if loc_r.status_code != 200:
-        print(f"    ⚠️  Could not fetch locations for inventory sync")
-        return
-    locations = loc_r.json().get("locations", [])
-    if not locations:
-        print(f"    ⚠️  No locations found")
-        return
-    location_id = locations[0]["id"]
+        return  # No qty data from S&S — skip silently
 
     synced = 0
     for variant in shopify_variants:
-        sku_code        = variant.get("sku", "")
-        inventory_item  = variant.get("inventory_item_id")
-        target_qty      = ss_qty.get(sku_code, 0)
+        sku_code       = variant.get("sku", "")
+        inventory_item = variant.get("inventory_item_id")
+        target_qty     = ss_qty.get(sku_code, 0)
 
         if not inventory_item:
             continue
 
-        # Set inventory level
         inv_r = sh_post("inventory_levels/set.json", token, {
             "inventory_item_id": inventory_item,
             "location_id":       location_id,
@@ -894,7 +954,7 @@ def sync_inventory(pid, skus, col_tag, token):
         })
         if inv_r.status_code in (200, 201):
             synced += 1
-        time.sleep(0.05)  # avoid hammering inventory endpoint
+        time.sleep(0.05)
 
     print(f"    📦 Inventory synced: {synced}/{len(shopify_variants)} variants")
 
@@ -909,6 +969,9 @@ def run():
     if not token:
         print("❌ No Shopify token — aborting")
         return
+
+    print("📍 Fetching Shopify location...")
+    location_id = get_location_id(token)
 
     print("📁 Loading collections...")
     collections = get_collections(token)
@@ -969,12 +1032,15 @@ def run():
                 else:
                     print(f"  ⚠️  Update failed {r.status_code}: {r.text[:150]}")
 
+                # Update variant prices with correct gross margin
+                update_variant_prices(pid, skus, col_tag, token)
+
                 # SEO + metafields
                 ok = set_seo_and_metafields(pid, page_title, meta_desc, style, token)
                 print(f"  🔍 SEO + metafields {'set' if ok else 'FAILED'}")
 
                 # Sync inventory quantities
-                sync_inventory(pid, skus, col_tag, token)
+                sync_inventory(pid, skus, location_id, token)
             else:
                 print(f"  ⚠️  No SKUs found — skipping content update")
 
@@ -1035,7 +1101,7 @@ def run():
         print(f"  🔍 SEO + metafields {'set' if ok else 'FAILED'}")
 
         # Sync inventory quantities
-        sync_inventory(pid, skus, col_tag, token)
+        sync_inventory(pid, skus, location_id, token)
 
         existing[title.lower().strip()] = {"id": pid, "status": "draft"}
         stats["created"] += 1
