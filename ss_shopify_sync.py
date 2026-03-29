@@ -141,7 +141,7 @@ BRANDS_BY_CAT = {
         "Adidas", "Independent Trading Co.", "Tommy Hilfiger", "vineyard vines",
     ],
     "Bags": [
-        "Liberty Bags", "OAD", "BAGedge", "Q-Tees", "Augusta Sportswear",
+        "Liberty Bags", "OAD", "BAGedge", "Q-Tees",
         "Under Armour", "DRI DUCK", "Adidas", "Nomadix", "Russell Athletic",
         "Independent Trading Co.", "North End",
     ],
@@ -800,10 +800,30 @@ def build_payload(style, skus, col_tag):
         }
     }, page_title, meta_desc
 
+class DailyLimitReached(Exception):
+    """Raised when Shopify daily variant creation limit is hit — stop the run."""
+    pass
+
 def create_with_retry(payload, token):
     r = sh_post("products.json", token, payload)
     if r.status_code in (200, 201):
         return r.json().get("product")
+
+    # Detect daily variant creation limit — no point retrying, stop the whole run
+    if r.status_code == 429 and "Daily variant creation limit" in r.text:
+        raise DailyLimitReached()
+
+    # Rate limit (API calls, not variant limit) — wait and retry once
+    if r.status_code == 429:
+        print("    ⏳ API rate limit — waiting 60s")
+        time.sleep(60)
+        r = sh_post("products.json", token, payload)
+        if r.status_code in (200, 201):
+            return r.json().get("product")
+        if r.status_code == 429 and "Daily variant creation limit" in r.text:
+            raise DailyLimitReached()
+
+    # Timeout — retry with fewer variants
     if r.status_code in (504, 522) or "timeout" in r.text.lower():
         print("    ⚠️  Timeout — retrying with 50 variants")
         payload["product"]["variants"] = payload["product"]["variants"][:50]
@@ -811,6 +831,9 @@ def create_with_retry(payload, token):
         r2 = sh_post("products.json", token, payload)
         if r2.status_code in (200, 201):
             return r2.json().get("product")
+        if r2.status_code == 429 and "Daily variant creation limit" in r2.text:
+            raise DailyLimitReached()
+
     print(f"    ❌ Create failed {r.status_code}: {r.text[:300]}")
     return None
 
@@ -978,7 +1001,15 @@ def run():
         payload, page_title, meta_desc = build_payload(style, skus, col_tag)
 
         # Create
-        created = create_with_retry(payload, token)
+        try:
+            created = create_with_retry(payload, token)
+        except DailyLimitReached:
+            remaining = len(all_styles) - i
+            print(f"\n DAILY LIMIT HIT at product {i}/{len(all_styles)}")
+            print(f"   {stats['created']} products created this run. {remaining} still pending.")
+            print("   Shopify daily variant limit resets at midnight PST.")
+            print("   Next scheduled sync will resume automatically — already created products are skipped.")
+            break
         if not created:
             stats["errors"] += 1
             continue
