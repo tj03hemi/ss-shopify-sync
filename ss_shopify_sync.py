@@ -489,10 +489,17 @@ def build_description(style, col_tag):
   <div class="embroidery-cta">
     <h3>Make It Yours — Custom Embroidery by Summit Standard Co.</h3>
     <p>Every piece in our catalog is selected for embroidery quality and long-term wearability.
-    Whether you're outfitting a team, building a brand, or just dialing in your own standard —
-    we'll stitch it right.</p>
-    <p><strong>Request a free custom embroidery quote on this item.</strong>
-    Low minimums. Fast turnaround. Built to last.</p>
+    Whether you&#39;re outfitting a team, building a brand, or just dialing in your own standard —
+    we&#39;ll stitch it right. Low minimums. Fast turnaround. Built to last.</p>
+    <p>
+      <a href="https://summitstandardco.com/pages/custom-orders"
+         style="display:inline-block;background-color:#000000;color:#ffffff;padding:14px 28px;
+                text-decoration:none;font-weight:bold;letter-spacing:0.05em;font-size:14px;
+                text-transform:uppercase;"
+         target="_blank">
+        Request a Quote &rarr;
+      </a>
+    </p>
     <p><em>Find Your Standard.</em></p>
   </div>
 
@@ -598,27 +605,48 @@ def add_to_collection(pid, col_id, token):
     return r.status_code in (200, 201)
 
 def set_product_category(pid, tax_gid, token):
-    """Set Shopify taxonomy category via GraphQL."""
+    """
+    Set Shopify taxonomy category via GraphQL.
+    category field in ProductInput is TaxonomyCategoryInput (not String).
+    Must be passed as full input object — inline String! type causes silent failure.
+    """
     mutation = """
-    mutation setCategory($id: ID!, $category: String!) {
-      productUpdate(input: {id: $id, category: $category}) {
-        product { id }
+    mutation productUpdate($input: ProductInput!) {
+      productUpdate(input: $input) {
+        product {
+          id
+          category { id fullName }
+        }
         userErrors { field message }
       }
     }"""
+    variables = {
+        "input": {
+            "id":       f"gid://shopify/Product/{pid}",
+            "category": tax_gid,
+        }
+    }
     r = requests.post(
         f"https://{SHOPIFY_STORE}/admin/api/2024-10/graphql.json",
         headers={"X-Shopify-Access-Token": token, "Content-Type": "application/json"},
-        json={"query": mutation,
-              "variables": {"id": f"gid://shopify/Product/{pid}", "category": tax_gid}},
+        json={"query": mutation, "variables": variables},
         timeout=30)
-    if r.status_code == 200:
-        errors = r.json().get("data", {}).get("productUpdate", {}).get("userErrors", [])
-        if errors:
-            print(f"    ⚠️  Category errors: {errors}")
-            return False
-        return True
-    return False
+    if r.status_code != 200:
+        print(f"    ⚠️  Category HTTP {r.status_code}: {r.text[:150]}")
+        return False
+    result    = r.json()
+    gql_errs  = result.get("errors", [])
+    if gql_errs:
+        print(f"    ⚠️  Category GraphQL errors: {gql_errs}")
+        return False
+    user_errs = result.get("data", {}).get("productUpdate", {}).get("userErrors", [])
+    if user_errs:
+        print(f"    ⚠️  Category userErrors: {user_errs}")
+        return False
+    assigned  = result.get("data", {}).get("productUpdate", {}).get("product", {}).get("category", {})
+    if assigned:
+        print(f"    🏷️  Category confirmed: {assigned.get('fullName', tax_gid)}")
+    return True
 
 def set_seo_and_metafields(pid, page_title, meta_desc, style, token):
     """Set SEO fields and metafields via REST."""
@@ -705,22 +733,35 @@ def build_payload(style, skus, col_tag):
         colors[color]["skus"].append(sku)
 
     # Variants
+    # Pricing: hats at 30% gross margin (cost / 0.70), all others at 20% (cost / 0.80)
+    gm_divisor = 0.70 if col_tag == "hats" else 0.80
     variants = []
     for color, cdata in colors.items():
         for sku in cdata["skus"]:
             size  = sku.get("sizeName", "")
-            price = sku.get("piecePrice") or sku.get("salePrice") or sku.get("basePrice") or 0
+            cost  = sku.get("piecePrice") or sku.get("salePrice") or sku.get("basePrice") or 0
             try:
-                price = float(price)
+                cost = float(cost)
             except (TypeError, ValueError):
-                price = 0.0
+                cost = 0.0
+            retail_price = round(cost / gm_divisor, 2) if cost > 0 else 0.0
+
+            # S&S qty field — may be int or string
+            qty = sku.get("qty") or sku.get("quantityAvailable") or sku.get("inventory") or 0
+            try:
+                qty = int(qty)
+            except (TypeError, ValueError):
+                qty = 0
+
             variants.append({
                 "option1": color,
                 "option2": size,
                 "sku":     sku.get("sku", ""),
-                "price":   str(round(price, 2)),
+                "price":   str(retail_price),
+                "cost":    str(round(cost, 2)),  # Store cost for reference
                 "inventory_management": "shopify",
                 "inventory_policy":     "deny",
+                "inventory_quantity":   qty,
                 "fulfillment_service":  "manual",
                 "taxable": True,
             })
@@ -772,6 +813,67 @@ def create_with_retry(payload, token):
             return r2.json().get("product")
     print(f"    ❌ Create failed {r.status_code}: {r.text[:300]}")
     return None
+
+def sync_inventory(pid, skus, col_tag, token):
+    """
+    Sync S&S inventory quantities to Shopify variant inventory levels.
+    Fetches the created product's variants, matches by SKU, sets qty.
+    """
+    # Get the product's variants from Shopify
+    r = sh_get(f"products/{pid}/variants.json", token, params={"limit": 250})
+    if r.status_code != 200:
+        print(f"    ⚠️  Could not fetch variants for inventory sync")
+        return
+
+    shopify_variants = r.json().get("variants", [])
+
+    # Build a SKU → qty map from S&S data
+    ss_qty = {}
+    for sku in skus:
+        sku_code = sku.get("sku", "")
+        qty = sku.get("qty") or sku.get("quantityAvailable") or sku.get("inventory") or 0
+        try:
+            qty = int(qty)
+        except (TypeError, ValueError):
+            qty = 0
+        if sku_code:
+            ss_qty[sku_code] = qty
+
+    if not ss_qty:
+        print(f"    ⚠️  No S&S qty data to sync")
+        return
+
+    # Get location ID (needed for inventory level updates)
+    loc_r = sh_get("locations.json", token)
+    if loc_r.status_code != 200:
+        print(f"    ⚠️  Could not fetch locations for inventory sync")
+        return
+    locations = loc_r.json().get("locations", [])
+    if not locations:
+        print(f"    ⚠️  No locations found")
+        return
+    location_id = locations[0]["id"]
+
+    synced = 0
+    for variant in shopify_variants:
+        sku_code        = variant.get("sku", "")
+        inventory_item  = variant.get("inventory_item_id")
+        target_qty      = ss_qty.get(sku_code, 0)
+
+        if not inventory_item:
+            continue
+
+        # Set inventory level
+        inv_r = sh_post("inventory_levels/set.json", token, {
+            "inventory_item_id": inventory_item,
+            "location_id":       location_id,
+            "available":         target_qty,
+        })
+        if inv_r.status_code in (200, 201):
+            synced += 1
+        time.sleep(0.05)  # avoid hammering inventory endpoint
+
+    print(f"    📦 Inventory synced: {synced}/{len(shopify_variants)} variants")
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 def run():
@@ -847,6 +949,9 @@ def run():
                 # SEO + metafields
                 ok = set_seo_and_metafields(pid, page_title, meta_desc, style, token)
                 print(f"  🔍 SEO + metafields {'set' if ok else 'FAILED'}")
+
+                # Sync inventory quantities
+                sync_inventory(pid, skus, col_tag, token)
             else:
                 print(f"  ⚠️  No SKUs found — skipping content update")
 
@@ -897,6 +1002,9 @@ def run():
         # SEO + metafields
         ok = set_seo_and_metafields(pid, page_title, meta_desc, style, token)
         print(f"  🔍 SEO + metafields {'set' if ok else 'FAILED'}")
+
+        # Sync inventory quantities
+        sync_inventory(pid, skus, col_tag, token)
 
         existing[title.lower().strip()] = {"id": pid, "status": "draft"}
         stats["created"] += 1
