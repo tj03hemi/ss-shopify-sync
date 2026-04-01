@@ -987,6 +987,18 @@ def run():
         print("❌ No styles fetched — check S&S credentials")
         return
 
+    # ── Sort: new products FIRST, updates second ──────────────────────────────
+    # This ensures the daily variant creation quota goes toward building the
+    # catalog before spending time on updates to existing products.
+    new_styles      = [(s, c, t) for s, c, t in all_styles
+                       if s.get("title", f"{s.get('brandName','')} {s.get('styleName','')}").lower().strip()
+                       not in existing]
+    existing_styles = [(s, c, t) for s, c, t in all_styles
+                       if s.get("title", f"{s.get('brandName','')} {s.get('styleName','')}").lower().strip()
+                       in existing]
+    all_styles = new_styles + existing_styles
+    print(f"  📊 {len(new_styles)} new to create, {len(existing_styles)} existing to update")
+
     stats = {"created": 0, "updated": 0, "skipped": 0, "errors": 0}
     cat_counts = {}
 
