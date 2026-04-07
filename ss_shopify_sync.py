@@ -565,10 +565,17 @@ def sh_put(path, token, payload):
 
 # ── Shopify helpers ────────────────────────────────────────────────────────────
 def get_collections(token):
+    """Fetch both custom (manual) and smart (automated) collections."""
     cols = {}
+    # Custom collections (manual)
     r = sh_get("custom_collections.json", token, params={"limit": 250})
     if r.status_code == 200:
         for c in r.json().get("custom_collections", []):
+            cols[c["handle"]] = c["id"]
+    # Smart collections (automated rules-based — e.g. embroidery-t-shirts)
+    r2 = sh_get("smart_collections.json", token, params={"limit": 250})
+    if r2.status_code == 200:
+        for c in r2.json().get("smart_collections", []):
             cols[c["handle"]] = c["id"]
     return cols
 
@@ -987,15 +994,29 @@ def run():
         print("❌ No styles fetched — check S&S credentials")
         return
 
-    # ── Sort: new products FIRST, updates second ──────────────────────────────
-    # This ensures the daily variant creation quota goes toward building the
-    # catalog before spending time on updates to existing products.
+    # ── Sort: new products FIRST (fewest variants first), updates second ────────
+    # Variant creation quota is consumed only on CREATE, not on UPDATE.
+    # Within new products, sort by category variant weight so we create the
+    # most products possible before hitting the daily limit.
+    # Hats/tees typically have 3-30 variants; knits/outerwear have 60-130.
+    CAT_VARIANT_WEIGHT = {
+        "hats":      1,   # ~3-30 variants
+        "tshirts":   2,   # ~10-50 variants
+        "bags":      3,   # ~5-30 variants
+        "polos":     4,   # ~20-60 variants
+        "woven":     4,   # ~10-40 variants
+        "fleece":    5,   # ~30-80 variants
+        "knits":     6,   # ~40-120 variants
+        "outerwear": 7,   # ~10-80 variants (but many brands)
+    }
     new_styles      = [(s, c, t) for s, c, t in all_styles
                        if s.get("title", f"{s.get('brandName','')} {s.get('styleName','')}").lower().strip()
                        not in existing]
     existing_styles = [(s, c, t) for s, c, t in all_styles
                        if s.get("title", f"{s.get('brandName','')} {s.get('styleName','')}").lower().strip()
                        in existing]
+    # Sort new products: lowest variant weight first
+    new_styles.sort(key=lambda x: CAT_VARIANT_WEIGHT.get(x[1], 5))
     all_styles = new_styles + existing_styles
     print(f"  📊 {len(new_styles)} new to create, {len(existing_styles)} existing to update")
 
