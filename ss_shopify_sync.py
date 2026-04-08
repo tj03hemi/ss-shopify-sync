@@ -581,14 +581,23 @@ def get_collections(token):
 
 def get_existing_products(token):
     existing = {}
-    params = {"limit": 250, "fields": "id,title,status"}
+    params = {"limit": 250, "fields": "id,title,status,metafields"}
     while True:
         r = sh_get("products.json", token, params=params)
         if r.status_code != 200:
             break
         for p in r.json().get("products", []):
+            # Check if embroidery_ready metafield already set
+            metafields = p.get("metafields", [])
+            embroidery_ready = any(
+                m.get("namespace") == "custom" and
+                m.get("key") == "embroidery_ready"
+                for m in metafields
+            )
             existing[p["title"].lower().strip()] = {
-                "id": p["id"], "status": p["status"]
+                "id": p["id"],
+                "status": p["status"],
+                "content_set": embroidery_ready,
             }
         link = r.headers.get("Link", "")
         if 'rel="next"' not in link:
@@ -601,8 +610,9 @@ def get_existing_products(token):
         pi = qs.get("page_info", [None])[0]
         if not pi:
             break
-        params = {"limit": 250, "fields": "id,title,status", "page_info": pi}
-    print(f"  📋 {len(existing)} existing Shopify products loaded")
+        params = {"limit": 250, "fields": "id,title,status,metafields", "page_info": pi}
+    already_set = sum(1 for v in existing.values() if v.get("content_set"))
+    print(f"  📋 {len(existing)} existing Shopify products loaded ({already_set} already have content set)")
     return existing
 
 def add_to_collection(pid, col_id, token):
@@ -1051,55 +1061,62 @@ def run():
 
         print(f"[{i}/{len(all_styles)}] {brand} {style_name}")
 
-        # Update existing product with new description, tags, SEO, metafields
+        # Update existing product
         existing_info = existing.get(title.lower().strip())
         if existing_info:
-            pid    = existing_info["id"]
-            status = existing_info["status"]
-            print(f"  🔄 Exists ({status}) — updating content, tags, SEO, metafields")
+            pid         = existing_info["id"]
+            status      = existing_info["status"]
+            content_set = existing_info.get("content_set", False)
 
-            # Fetch SKUs so we can rebuild the full payload
+            # Fetch SKUs — always needed for prices + inventory
             skus = get_skus(style_id)
             if skus:
-                payload, page_title, meta_desc = build_payload(style, skus, col_tag)
-                update_data = {
-                    "id":           pid,
-                    "body_html":    payload["product"]["body_html"],
-                    "tags":         payload["product"]["tags"],
-                    "product_type": payload["product"]["product_type"],
-                    "vendor":       payload["product"]["vendor"],
-                    # Never demote active products back to draft
-                }
-                if status != "active":
-                    update_data["status"] = "draft"
-
-                r = sh_put(f"products/{pid}.json", token, {"product": update_data})
-                if r.status_code in (200, 201):
-                    print(f"  ✅ Content + tags updated")
+                if content_set:
+                    # Content already set — only update prices and inventory
+                    print(f"  ⚡ Exists ({status}) — prices + inventory only")
+                    update_variant_prices(pid, skus, col_tag, token)
+                    sync_inventory(pid, skus, location_id, token)
                 else:
-                    print(f"  ⚠️  Update failed {r.status_code}: {r.text[:150]}")
+                    # First time — do full content update
+                    print(f"  🔄 Exists ({status}) — full update (content, tags, SEO, metafields)")
+                    payload, page_title, meta_desc = build_payload(style, skus, col_tag)
+                    update_data = {
+                        "id":           pid,
+                        "body_html":    payload["product"]["body_html"],
+                        "tags":         payload["product"]["tags"],
+                        "product_type": payload["product"]["product_type"],
+                        "vendor":       payload["product"]["vendor"],
+                    }
+                    if status != "active":
+                        update_data["status"] = "draft"
 
-                # Update variant prices with correct gross margin
-                update_variant_prices(pid, skus, col_tag, token)
+                    r = sh_put(f"products/{pid}.json", token, {"product": update_data})
+                    if r.status_code in (200, 201):
+                        print(f"  ✅ Content + tags updated")
+                    else:
+                        print(f"  ⚠️  Update failed {r.status_code}: {r.text[:150]}")
 
-                # SEO + metafields
-                ok = set_seo_and_metafields(pid, page_title, meta_desc, style, token)
-                print(f"  🔍 SEO + metafields {'set' if ok else 'FAILED'}")
+                    update_variant_prices(pid, skus, col_tag, token)
 
-                # Sync inventory quantities
-                sync_inventory(pid, skus, location_id, token)
+                    ok = set_seo_and_metafields(pid, page_title, meta_desc, style, token)
+                    print(f"  🔍 SEO + metafields {'set' if ok else 'FAILED'}")
+
+                    sync_inventory(pid, skus, location_id, token)
+
+                    # Ensure collection + category on first full update
+                    col_id = collections.get(col_handle)
+                    if col_id:
+                        add_to_collection(pid, col_id, token)
+                    if tax_gid:
+                        set_product_category(pid, tax_gid, token)
+
+                    # Mark as content_set so future runs skip full update
+                    existing_info["content_set"] = True
             else:
-                print(f"  ⚠️  No SKUs found — skipping content update")
-
-            # Always ensure collection + category
-            col_id = collections.get(col_handle)
-            if col_id:
-                add_to_collection(pid, col_id, token)
-            if tax_gid:
-                set_product_category(pid, tax_gid, token)
+                print(f"  ⚠️  No SKUs found — skipping")
 
             stats["updated"] += 1
-            time.sleep(0.8)
+            time.sleep(0.5)
             continue
 
         # Fetch SKUs
