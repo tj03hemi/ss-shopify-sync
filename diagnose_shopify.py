@@ -8,11 +8,26 @@ Usage:
 """
 import os, requests, json
 
-SHOPIFY_STORE  = os.environ.get("SHOPIFY_STORE", "summitstandardco.myshopify.com")
-TOKEN          = os.environ.get("SHOPIFY_CLIENT_SECRET", "")
+SHOPIFY_STORE         = os.environ.get("SHOPIFY_STORE", "summitstandardco.myshopify.com")
+SHOPIFY_CLIENT_ID     = os.environ.get("SHOPIFY_CLIENT_ID", "")
+SHOPIFY_CLIENT_SECRET = os.environ.get("SHOPIFY_CLIENT_SECRET", "")
 
+# Get real access token via OAuth exchange (same as sync script)
+def get_token():
+    url = f"https://{SHOPIFY_STORE}/admin/oauth/access_token"
+    r = requests.post(url, json={
+        "client_id": SHOPIFY_CLIENT_ID,
+        "client_secret": SHOPIFY_CLIENT_SECRET,
+        "grant_type": "client_credentials",
+    }, timeout=30)
+    if r.status_code == 200:
+        return r.json().get("access_token")
+    # Fallback: use client_secret directly as token
+    return SHOPIFY_CLIENT_SECRET
+
+TOKEN = get_token()
 if not TOKEN:
-    print("❌ SHOPIFY_CLIENT_SECRET not set")
+    print("❌ Could not get Shopify token")
     exit(1)
 
 headers = {"X-Shopify-Access-Token": TOKEN, "Content-Type": "application/json"}
