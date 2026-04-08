@@ -12,10 +12,19 @@ SHOPIFY_STORE         = os.environ.get("SHOPIFY_STORE", "summitstandardco.myshop
 SHOPIFY_CLIENT_ID     = os.environ.get("SHOPIFY_CLIENT_ID", "")
 SHOPIFY_CLIENT_SECRET = os.environ.get("SHOPIFY_CLIENT_SECRET", "")
 
-# Custom apps use a static Admin API access token directly
-# Set SHOPIFY_ACCESS_TOKEN in GitHub secrets with the token from
-# Shopify Admin → Apps → your app → API credentials → Admin API access token
-TOKEN = os.environ.get("SHOPIFY_ACCESS_TOKEN") or SHOPIFY_CLIENT_SECRET
+# Get token via OAuth exchange (same method as sync script)
+def get_token():
+    url = f"https://{SHOPIFY_STORE}/admin/oauth/access_token"
+    r = requests.post(url, json={
+        "client_id": SHOPIFY_CLIENT_ID,
+        "client_secret": SHOPIFY_CLIENT_SECRET,
+        "grant_type": "client_credentials",
+    }, timeout=30)
+    if r.status_code == 200:
+        return r.json().get("access_token")
+    return SHOPIFY_CLIENT_SECRET
+
+TOKEN = get_token()
 if not TOKEN:
     print("❌ Could not get Shopify token")
     exit(1)
