@@ -845,7 +845,10 @@ def create_with_retry(payload, token):
     return None
 
 def get_location_id(token):
-    """Fetch the primary Shopify location ID. Called once at startup."""
+    """
+    Fetch the primary Shopify location ID.
+    Prefers 'Shop location' over fulfillment services like Printful.
+    """
     r = sh_get("locations.json", token)
     if r.status_code != 200:
         print(f"  ⚠️  Could not fetch locations (HTTP {r.status_code}): {r.text[:150]}")
@@ -854,9 +857,20 @@ def get_location_id(token):
     if not locations:
         print("  ⚠️  No locations found in Shopify account")
         return None
-    location_id = locations[0]["id"]
-    print(f"  📍 Location ID: {location_id} ({locations[0].get('name', 'Primary')})")
-    return location_id
+    # Print all locations for visibility
+    for loc in locations:
+        print(f"  📍 ID: {loc['id']} | Name: {loc['name']} | Active: {loc['active']}")
+    # Prefer a location named 'Shop location' over fulfillment services
+    for loc in locations:
+        if "shop" in loc.get("name", "").lower() and loc.get("active"):
+            print(f"  ✅ Using: {loc['name']} (ID: {loc['id']})")
+            return loc["id"]
+    # Fallback to first active location
+    for loc in locations:
+        if loc.get("active"):
+            print(f"  ✅ Using: {loc['name']} (ID: {loc['id']})")
+            return loc["id"]
+    return None
 
 def update_variant_prices(pid, skus, col_tag, token):
     """
