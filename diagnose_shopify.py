@@ -12,20 +12,10 @@ SHOPIFY_STORE         = os.environ.get("SHOPIFY_STORE", "summitstandardco.myshop
 SHOPIFY_CLIENT_ID     = os.environ.get("SHOPIFY_CLIENT_ID", "")
 SHOPIFY_CLIENT_SECRET = os.environ.get("SHOPIFY_CLIENT_SECRET", "")
 
-# Get real access token via OAuth exchange (same as sync script)
-def get_token():
-    url = f"https://{SHOPIFY_STORE}/admin/oauth/access_token"
-    r = requests.post(url, json={
-        "client_id": SHOPIFY_CLIENT_ID,
-        "client_secret": SHOPIFY_CLIENT_SECRET,
-        "grant_type": "client_credentials",
-    }, timeout=30)
-    if r.status_code == 200:
-        return r.json().get("access_token")
-    # Fallback: use client_secret directly as token
-    return SHOPIFY_CLIENT_SECRET
-
-TOKEN = get_token()
+# Custom apps use a static Admin API access token directly
+# Set SHOPIFY_ACCESS_TOKEN in GitHub secrets with the token from
+# Shopify Admin → Apps → your app → API credentials → Admin API access token
+TOKEN = os.environ.get("SHOPIFY_ACCESS_TOKEN") or SHOPIFY_CLIENT_SECRET
 if not TOKEN:
     print("❌ Could not get Shopify token")
     exit(1)
@@ -74,16 +64,19 @@ else:
 # ── Test 4: Collections ────────────────────────────────────
 print("\n4️⃣  Testing collections access...")
 r = requests.get(f"{base}/custom_collections.json", headers=headers,
-                 params={"limit": 5, "fields": "id,handle,title"})
+                 params={"limit": 250, "fields": "id,handle,title"})
 print(f"   Custom collections HTTP {r.status_code} — ", end="")
 if r.status_code == 200:
     cols = r.json().get("custom_collections", [])
     print(f"✅ {len(cols)} found")
+    for c in cols:
+        marker = " ← T-SHIRTS" if "t-shirt" in c["handle"] else ""
+        print(f"   📁 {c['handle']}{marker}")
 else:
     print(f"❌ {r.text[:100]}")
 
 r2 = requests.get(f"{base}/smart_collections.json", headers=headers,
-                  params={"limit": 10, "fields": "id,handle,title"})
+                  params={"limit": 250, "fields": "id,handle,title"})
 print(f"   Smart collections HTTP {r2.status_code} — ", end="")
 if r2.status_code == 200:
     scols = r2.json().get("smart_collections", [])
