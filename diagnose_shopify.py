@@ -8,7 +8,7 @@ Usage:
 """
 import os, requests, json
 
-SHOPIFY_STORE  = "summitstandardco.myshopify.com"
+SHOPIFY_STORE  = os.environ.get("SHOPIFY_STORE", "summitstandardco.myshopify.com")
 TOKEN          = os.environ.get("SHOPIFY_CLIENT_SECRET", "")
 
 if not TOKEN:
