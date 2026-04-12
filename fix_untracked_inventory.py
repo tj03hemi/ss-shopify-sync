@@ -70,7 +70,11 @@ def run():
     while True:
         r = sh_get("products.json", token, params=params)
         if not r or r.status_code != 200:
-            print(f"  ⚠️  Failed to fetch products")
+            print(f"  ⚠️  Fetch failed — retrying in 10s")
+            time.sleep(10)
+            r = sh_get("products.json", token, params=params)
+        if not r or r.status_code != 200:
+            print(f"  ❌ Fetch failed twice — stopping pagination here")
             break
         batch = r.json().get("products", [])
         product_ids.extend(batch)
@@ -87,9 +91,9 @@ def run():
         pi = qs.get("page_info", [None])[0]
         if not pi:
             break
-        params = {"limit": 100, "status": "draft",
-                  "fields": "id,title", "page_info": pi}
-        time.sleep(0.2)
+        # Use page_info only — no other params alongside it
+        params = {"limit": 100, "fields": "id,title", "page_info": pi}
+        time.sleep(0.3)
 
     print(f"  {len(product_ids)} draft products found\n")
 
