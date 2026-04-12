@@ -882,112 +882,92 @@ def get_location_id(token):
             return loc["id"]
     return None
 
-def update_variant_prices(pid, skus, col_tag, token):
+def sync_prices_and_inventory(pid, skus, col_tag, location_id, token):
     """
-    Update price on all existing variants using correct gross margin.
-    Hats: cost / 0.70 (30% GM). All others: cost / 0.80 (20% GM).
-    Matches by SKU code between S&S data and Shopify variants.
+    Combined price + inventory update in a single Shopify variant fetch.
+    Saves one API call per product vs calling them separately.
+    Hats: 30% GM (cost / 0.70). All others: 20% GM (cost / 0.80).
     """
     gm_divisor = 0.70 if col_tag == "hats" else 0.80
 
-    # Build SKU → retail price map from S&S cost data
+    # Build SKU maps from S&S data
     ss_prices = {}
+    ss_qty    = {}
     for sku in skus:
         sku_code = sku.get("sku", "")
+        if not sku_code:
+            continue
+        # Price
         cost = sku.get("piecePrice") or sku.get("salePrice") or sku.get("basePrice") or 0
         try:
             cost = float(cost)
         except (TypeError, ValueError):
             cost = 0.0
-        if sku_code and cost > 0:
+        if cost > 0:
             ss_prices[sku_code] = str(round(cost / gm_divisor, 2))
+        # Inventory
+        qty = sku.get("qty") or sku.get("quantityAvailable") or sku.get("inventory") or 0
+        try:
+            qty = int(qty)
+        except (TypeError, ValueError):
+            qty = 0
+        ss_qty[sku_code] = qty
 
-    if not ss_prices:
-        return  # No cost data from S&S — skip silently
-
-    # Get existing variants from Shopify
-    r = sh_get(f"products/{pid}/variants.json", token, params={"limit": 250})
-    if r.status_code != 200:
-        print(f"    ⚠️  Could not fetch variants for price update (HTTP {r.status_code})")
+    if not ss_prices and not ss_qty:
         return
 
-    shopify_variants = r.json().get("variants", [])
-    updated = 0
-    for variant in shopify_variants:
-        sku_code   = variant.get("sku", "")
-        variant_id = variant.get("id")
-        new_price  = ss_prices.get(sku_code)
-
-        if not new_price or not variant_id:
-            continue
-
-        # Only update if price actually changed
-        if variant.get("price") == new_price:
-            updated += 1
-            continue
-
-        r2 = sh_put(f"variants/{variant_id}.json", token, {
-            "variant": {"id": variant_id, "price": new_price}
-        })
-        if r2.status_code in (200, 201):
-            updated += 1
-        time.sleep(0.05)
-
-    print(f"    💰 Prices updated: {updated}/{len(shopify_variants)} variants")
-
-def sync_inventory(pid, skus, location_id, token):
-    """
-    Sync S&S inventory quantities to Shopify variant inventory levels.
-    location_id is fetched once at startup and passed in — not re-fetched per product.
-    """
-    if not location_id:
-        return
-
-    # Get the product variants from Shopify to get inventory_item_id per variant
+    # Single variant fetch for both price + inventory
     r = sh_get(f"products/{pid}/variants.json", token, params={"limit": 250})
+    if r.status_code == 429:
+        print(f"    ⏳ Rate limit on variants fetch — pausing 10s")
+        time.sleep(10)
+        r = sh_get(f"products/{pid}/variants.json", token, params={"limit": 250})
     if r.status_code != 200:
-        print(f"    ⚠️  Could not fetch variants for inventory sync (HTTP {r.status_code})")
+        print(f"    ⚠️  Could not fetch variants (HTTP {r.status_code})")
         return
 
     shopify_variants = r.json().get("variants", [])
     if not shopify_variants:
         return
 
-    # Build SKU → qty map from S&S data
-    # S&S may use qty, quantityAvailable, or inventory depending on endpoint
-    ss_qty = {}
-    for sku in skus:
-        sku_code = sku.get("sku", "")
-        qty = sku.get("qty") or sku.get("quantityAvailable") or sku.get("inventory") or 0
-        try:
-            qty = int(qty)
-        except (TypeError, ValueError):
-            qty = 0
-        if sku_code:
-            ss_qty[sku_code] = qty
+    price_updated = 0
+    inv_synced    = 0
 
-    if not ss_qty:
-        return  # No qty data from S&S — skip silently
-
-    synced = 0
     for variant in shopify_variants:
         sku_code       = variant.get("sku", "")
+        variant_id     = variant.get("id")
         inventory_item = variant.get("inventory_item_id")
-        target_qty     = ss_qty.get(sku_code, 0)
 
-        if not inventory_item:
-            continue
+        # Price update — only if changed
+        new_price = ss_prices.get(sku_code)
+        if new_price and variant_id and variant.get("price") != new_price:
+            r2 = sh_put(f"variants/{variant_id}.json", token, {
+                "variant": {"id": variant_id, "price": new_price}
+            })
+            if r2.status_code in (200, 201):
+                price_updated += 1
+        elif new_price:
+            price_updated += 1  # Already correct price
 
-        inv_r = sh_post("inventory_levels/set.json", token, {
-            "inventory_item_id": inventory_item,
-            "location_id":       location_id,
-            "available":         target_qty,
-        })
-        if inv_r.status_code in (200, 201):
-            synced += 1
-        time.sleep(0.05)
+        # Inventory update
+        if location_id and inventory_item and sku_code in ss_qty:
+            inv_r = sh_post("inventory_levels/set.json", token, {
+                "inventory_item_id": inventory_item,
+                "location_id":       location_id,
+                "available":         ss_qty[sku_code],
+            })
+            if inv_r.status_code in (200, 201):
+                inv_synced += 1
 
-    print(f"    📦 Inventory synced: {synced}/{len(shopify_variants)} variants")
+    print(f"    💰 {price_updated}/{len(shopify_variants)} prices  "
+          f"📦 {inv_synced}/{len(shopify_variants)} inventory")
+
+# Keep these as thin wrappers for the full-update path
+def update_variant_prices(pid, skus, col_tag, token):
+    sync_prices_and_inventory(pid, skus, col_tag, None, token)
+
+def sync_inventory(pid, skus, location_id, token):
+    sync_prices_and_inventory(pid, skus, "other", location_id, token)
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 def run():
@@ -1074,8 +1054,7 @@ def run():
                 if content_set:
                     # Content already set — only update prices and inventory
                     print(f"  ⚡ Exists ({status}) — prices + inventory only")
-                    update_variant_prices(pid, skus, col_tag, token)
-                    sync_inventory(pid, skus, location_id, token)
+                    sync_prices_and_inventory(pid, skus, col_tag, location_id, token)
                 else:
                     # First time — do full content update
                     print(f"  🔄 Exists ({status}) — full update (content, tags, SEO, metafields)")
@@ -1096,12 +1075,11 @@ def run():
                     else:
                         print(f"  ⚠️  Update failed {r.status_code}: {r.text[:150]}")
 
-                    update_variant_prices(pid, skus, col_tag, token)
-
                     ok = set_seo_and_metafields(pid, page_title, meta_desc, style, token)
                     print(f"  🔍 SEO + metafields {'set' if ok else 'FAILED'}")
 
-                    sync_inventory(pid, skus, location_id, token)
+                    # Combined prices + inventory in single variant fetch
+                    sync_prices_and_inventory(pid, skus, col_tag, location_id, token)
 
                     # Ensure collection + category on first full update
                     col_id = collections.get(col_handle)
@@ -1113,16 +1091,20 @@ def run():
                     # Mark as content_set so future runs skip full update
                     existing_info["content_set"] = True
             else:
-                print(f"  ⚠️  No SKUs found — skipping")
+                # No SKUs from S&S — demote to draft so it's visible as needing attention
+                print(f"  ⚠️  No SKUs from S&S — demoting to draft")
+                if status == "active":
+                    sh_put(f"products/{pid}.json", token,
+                           {"product": {"id": pid, "status": "draft"}})
 
             stats["updated"] += 1
-            time.sleep(0.5)
+            time.sleep(0.2)
             continue
 
         # Fetch SKUs
         skus = get_skus(style_id)
         if not skus:
-            print(f"  ⚠️  No SKUs — skipping")
+            print(f"  ⏭️  No SKUs from S&S — skipping creation")
             stats["skipped"] += 1
             continue
         print(f"  ✅ {len(skus)} SKUs")
