@@ -747,8 +747,8 @@ def build_payload(style, skus, col_tag):
         colors[color]["skus"].append(sku)
 
     # Variants
-    # Pricing: hats at 30% gross margin (cost / 0.70), all others at 20% (cost / 0.80)
-    gm_divisor = 0.70 if col_tag == "hats" else 0.80
+    # Pricing: hats at 60% gross margin (cost / 0.40), all others at 40% (cost / 0.60)
+    gm_divisor = 0.40 if col_tag == "hats" else 0.60
     variants = []
     for color, cdata in colors.items():
         for sku in cdata["skus"]:
