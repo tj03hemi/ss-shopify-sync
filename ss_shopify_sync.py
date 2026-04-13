@@ -581,23 +581,20 @@ def get_collections(token):
 
 def get_existing_products(token):
     existing = {}
-    params = {"limit": 250, "fields": "id,title,status,metafields"}
+    params = {"limit": 250, "fields": "id,title,status,tags"}
     while True:
         r = sh_get("products.json", token, params=params)
         if r.status_code != 200:
             break
         for p in r.json().get("products", []):
-            # Check if embroidery_ready metafield already set
-            metafields = p.get("metafields", [])
-            embroidery_ready = any(
-                m.get("namespace") == "custom" and
-                m.get("key") == "embroidery_ready"
-                for m in metafields
-            )
+            # Use embroidery-ready tag as content_set signal —
+            # tags are returned by products.json, metafields are not
+            tags = p.get("tags", "")
+            content_set = "embroidery-ready" in tags
             existing[p["title"].lower().strip()] = {
                 "id": p["id"],
                 "status": p["status"],
-                "content_set": embroidery_ready,
+                "content_set": content_set,
             }
         link = r.headers.get("Link", "")
         if 'rel="next"' not in link:
@@ -610,7 +607,7 @@ def get_existing_products(token):
         pi = qs.get("page_info", [None])[0]
         if not pi:
             break
-        params = {"limit": 250, "fields": "id,title,status,metafields", "page_info": pi}
+        params = {"limit": 250, "fields": "id,title,status,tags", "page_info": pi}
     already_set = sum(1 for v in existing.values() if v.get("content_set"))
     print(f"  📋 {len(existing)} existing Shopify products loaded ({already_set} already have content set)")
     return existing
