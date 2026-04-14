@@ -883,9 +883,9 @@ def sync_prices_and_inventory(pid, skus, col_tag, location_id, token):
     """
     Combined price + inventory update in a single Shopify variant fetch.
     Saves one API call per product vs calling them separately.
-    Hats: 30% GM (cost / 0.70). All others: 20% GM (cost / 0.80).
+    Hats: 60% GM (cost / 0.40). All others: 40% GM (cost / 0.60).
     """
-    gm_divisor = 0.70 if col_tag == "hats" else 0.80
+    gm_divisor = 0.40 if col_tag == "hats" else 0.60
 
     # Build SKU maps from S&S data
     ss_prices = {}
@@ -928,6 +928,7 @@ def sync_prices_and_inventory(pid, skus, col_tag, location_id, token):
         return
 
     price_updated = 0
+    price_no_match = 0
     inv_synced    = 0
 
     for variant in shopify_variants:
@@ -935,16 +936,20 @@ def sync_prices_and_inventory(pid, skus, col_tag, location_id, token):
         variant_id     = variant.get("id")
         inventory_item = variant.get("inventory_item_id")
 
-        # Price update — only if changed
+        # Price update — always push if SKU matched
         new_price = ss_prices.get(sku_code)
-        if new_price and variant_id and variant.get("price") != new_price:
-            r2 = sh_put(f"variants/{variant_id}.json", token, {
-                "variant": {"id": variant_id, "price": new_price}
-            })
-            if r2.status_code in (200, 201):
-                price_updated += 1
-        elif new_price:
-            price_updated += 1  # Already correct price
+        if new_price and variant_id:
+            if variant.get("price") != new_price:
+                r2 = sh_put(f"variants/{variant_id}.json", token, {
+                    "variant": {"id": variant_id, "price": new_price}
+                })
+                if r2.status_code in (200, 201):
+                    price_updated += 1
+            else:
+                price_updated += 1  # Already correct — count but don't push
+
+        if not new_price:
+            price_no_match += 1
 
         # Inventory update
         if location_id and inventory_item and sku_code in ss_qty:
@@ -957,7 +962,8 @@ def sync_prices_and_inventory(pid, skus, col_tag, location_id, token):
                 inv_synced += 1
 
     print(f"    💰 {price_updated}/{len(shopify_variants)} prices  "
-          f"📦 {inv_synced}/{len(shopify_variants)} inventory")
+          f"📦 {inv_synced}/{len(shopify_variants)} inventory"
+          + (f"  ⚠️  {price_no_match} SKU mismatches" if price_no_match else ""))
 
 # Keep these as thin wrappers for the full-update path
 def update_variant_prices(pid, skus, col_tag, token):
