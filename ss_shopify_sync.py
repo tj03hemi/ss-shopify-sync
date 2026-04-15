@@ -193,9 +193,13 @@ def fetch_all_styles():
     """
     Fetch styles brand-by-brand for each target category.
     Filter client-side by confirmed baseCategory values.
-    Returns list of (style, collection_tag, default_tax_key) tuples.
+    Also pre-fetches SKUs for all matched styles to eliminate
+    per-product S&S API calls in the main loop.
+    Returns:
+        results:   list of (style, collection_tag, default_tax_key) tuples
+        sku_cache: dict of styleID -> list of SKUs
     """
-    results = []
+    results  = []
     seen_ids = set()
 
     for base_cat, brands in BRANDS_BY_CAT.items():
@@ -221,7 +225,22 @@ def fetch_all_styles():
             time.sleep(0.3)
 
     print(f"\n📊 Total matched styles: {len(results)}")
-    return results
+
+    # Pre-fetch all SKUs upfront — eliminates 2,800+ individual S&S API
+    # calls from the main loop, saving roughly 30-40 minutes per run
+    print(f"📦 Pre-fetching SKUs for all {len(results)} styles...")
+    sku_cache = {}
+    for i, (style, col_tag, tax_key) in enumerate(results, 1):
+        sid  = style.get("styleID")
+        skus = get_skus(sid)
+        sku_cache[sid] = skus
+        if i % 200 == 0:
+            print(f"  {i}/{len(results)} SKUs fetched...")
+        time.sleep(0.15)
+    total_skus = sum(len(v) for v in sku_cache.values())
+    print(f"  SKU pre-fetch complete — {total_skus:,} total SKUs across {len(results)} styles")
+
+    return results, sku_cache
 
 def get_skus(style_id):
     """Get all SKUs for a style from the products endpoint."""
@@ -995,7 +1014,7 @@ def run():
     existing = get_existing_products(token)
 
     print("\n📥 Fetching styles from S&S...")
-    all_styles = fetch_all_styles()
+    all_styles, sku_cache = fetch_all_styles()
 
     if not all_styles:
         print("❌ No styles fetched — check S&S credentials")
@@ -1051,8 +1070,8 @@ def run():
             status      = existing_info["status"]
             content_set = existing_info.get("content_set", False)
 
-            # Fetch SKUs — always needed for prices + inventory
-            skus = get_skus(style_id)
+            # Use pre-fetched SKUs — no extra S&S API call needed
+            skus = sku_cache.get(style_id, [])
             if skus:
                 if content_set:
                     # Content already set — only update prices and inventory
@@ -1104,8 +1123,8 @@ def run():
             time.sleep(0.2)
             continue
 
-        # Fetch SKUs
-        skus = get_skus(style_id)
+        # Use pre-fetched SKUs
+        skus = sku_cache.get(style_id, [])
         if not skus:
             print(f"  ⏭️  No SKUs from S&S — skipping creation")
             stats["skipped"] += 1
