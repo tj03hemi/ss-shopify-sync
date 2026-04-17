@@ -4,10 +4,17 @@ on:
   schedule:
     - cron: '0 13 * * *'
   workflow_dispatch:
+    inputs:
+      initial_build:
+        description: 'Initial build (creates products as active)'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 350
 
     steps:
       - name: Checkout repository
@@ -21,26 +28,12 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      - name: Debug — check which secrets are set
+      - name: Run sync
         env:
           SS_USERNAME:            ${{ secrets.SS_USERNAME }}
           SS_API_KEY:             ${{ secrets.SS_API_KEY }}
           SHOPIFY_STORE:          ${{ secrets.SHOPIFY_STORE }}
           SHOPIFY_CLIENT_ID:      ${{ secrets.SHOPIFY_CLIENT_ID }}
           SHOPIFY_CLIENT_SECRET:  ${{ secrets.SHOPIFY_CLIENT_SECRET }}
-        run: |
-          echo "SS_USERNAME set:           $([ -n "$SS_USERNAME" ] && echo YES || echo NO)"
-          echo "SS_API_KEY set:            $([ -n "$SS_API_KEY" ] && echo YES || echo NO)"
-          echo "SHOPIFY_STORE set:         $([ -n "$SHOPIFY_STORE" ] && echo YES || echo NO)"
-          echo "SHOPIFY_CLIENT_ID set:     $([ -n "$SHOPIFY_CLIENT_ID" ] && echo YES || echo NO)"
-          echo "SHOPIFY_CLIENT_SECRET set: $([ -n "$SHOPIFY_CLIENT_SECRET" ] && echo YES || echo NO)"
-          echo "SHOPIFY_STORE value:       $SHOPIFY_STORE"
-
-      - name: Run S&S to Shopify sync
-        env:
-          SS_USERNAME:            ${{ secrets.SS_USERNAME }}
-          SS_API_KEY:             ${{ secrets.SS_API_KEY }}
-          SHOPIFY_STORE:          ${{ secrets.SHOPIFY_STORE }}
-          SHOPIFY_CLIENT_ID:      ${{ secrets.SHOPIFY_CLIENT_ID }}
-          SHOPIFY_CLIENT_SECRET:  ${{ secrets.SHOPIFY_CLIENT_SECRET }}
-        run: python check_channels_collections.py
+          INITIAL_BUILD:          ${{ inputs.initial_build }}
+        run: python ss_shopify_sync.py
