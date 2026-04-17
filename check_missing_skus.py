@@ -59,17 +59,47 @@ def run():
     # Get all Shopify variants for Richardson 112
     token = get_shopify_token()
     print("Fetching Shopify variants for Richardson 112...")
-    r2 = requests.get(
-        f"https://{SHOPIFY_STORE}/admin/api/2024-10/products.json",
-        headers=sh(token),
-        params={"vendor": "Richardson", "fields": "id,title,variants"},
-        timeout=30)
-    products = r2.json().get("products", [])
-    r112 = next((p for p in products if "112" in p["title"]
-                 and "Snapback" in p["title"]), None)
+    # Search for Richardson 112 across ALL products, paginating
+    import urllib.parse
+    r112 = None
+    params = {"limit": 250, "fields": "id,title,vendor,variants"}
+    page = 0
+    while True:
+        page += 1
+        r2 = requests.get(
+            f"https://{SHOPIFY_STORE}/admin/api/2024-10/products.json",
+            headers=sh(token), params=params, timeout=60)
+        if r2.status_code != 200:
+            print(f"  ❌ HTTP {r2.status_code} fetching products")
+            return
+        batch = r2.json().get("products", [])
+        print(f"  Page {page}: scanning {len(batch)} products for Richardson 112...")
+        for p in batch:
+            title = p.get("title", "").lower()
+            if "richardson 112" in title and "snapback" in title:
+                # Only match the main 112, not 112FP, 112RE, etc.
+                # Check tags or exact style match
+                if p.get("title", "").strip().endswith("112") or                    "112 " in p.get("title", "") or                    p.get("title", "").endswith("- 112"):
+                    r112 = p
+                    print(f"  ✅ Found: {p['title']} (ID: {p['id']}, vendor: {p.get('vendor')})")
+                    break
+        if r112:
+            break
+        link = r2.headers.get("Link", "")
+        if 'rel="next"' not in link:
+            break
+        next_parts = [x.strip() for x in link.split(",") if 'rel="next"' in x]
+        if not next_parts:
+            break
+        cursor = next_parts[0].split(";")[0].strip("<>")
+        qs = urllib.parse.parse_qs(urllib.parse.urlparse(cursor).query)
+        pi = qs.get("page_info", [None])[0]
+        if not pi:
+            break
+        params = {"limit": 250, "fields": "id,title,vendor,variants", "page_info": pi}
 
     if not r112:
-        print("  ❌ Richardson 112 not found in Shopify")
+        print("  ❌ Richardson 112 not found in Shopify after scanning all products")
         return
 
     shop_variants = r112.get("variants", [])
