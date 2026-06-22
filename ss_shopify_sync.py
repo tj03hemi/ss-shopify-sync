@@ -1014,10 +1014,7 @@ def run():
             content_set = existing_info.get("content_set", False)
 
             if not skus:
-                print(f"  ⚠️  No SKUs from S&S — demoting to draft")
-                if status == "active":
-                    sh_put(f"products/{pid}.json", token,
-                           {"product": {"id": pid, "status": "draft"}})
+                print(f"  ⏭️  No SKUs from S&S — skipping (status unchanged)")
                 stats["updated"] += 1
                 time.sleep(0.2)
                 continue
