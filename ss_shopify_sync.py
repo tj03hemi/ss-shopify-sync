@@ -1,10 +1,21 @@
 """
-Summit Standard Co. — S&S Activewear → Shopify Sync (v2 Rebuild)
+Summit Standard Co. — S&S Activewear → Shopify Sync (v2.1)
+
+CHANGES IN v2.1
+  1. DUPLICATE FIX: products are now matched to existing ones by VARIANT SKU,
+     not by title. Titles drift (S&S edits a raw title, spacing changes, etc.),
+     and title matching was silently creating a second product every time that
+     happened. SKUs are stable, so this stops new duplicates at the source.
+     The S&S styleID is also stashed in a metafield (custom.wholesale_style_id)
+     for even more robust matching later if we want it.
+  2. COLLECTIONS: audience collections (Men's / Women's / Kids Apparel) are no
+     longer assigned. Products go to embroidery-all-products (always) plus their
+     one category collection. To re-enable Men's, see gender_collection_handle().
 
 Strategy:
   - Curated brand list (verified in S&S) — ~700-900 products vs 2,830 before
-  - Smart gender detection from title keywords
-  - Dual collection assignment (specific + all-products)
+  - Smart gender detection from title keywords (still used for tags + copy)
+  - Category collection assignment (+ all-products)
   - Publishes to Online Store, Point of Sale, and Shop
   - Bulletproof SKU matching with positional fallback
   - Honest price reporting
@@ -230,6 +241,7 @@ def detect_gender(style):
     """
     Smart gender detection from title + description + S&S gender field.
     Priority order: title keywords > S&S gender field > default 'unisex'.
+    Still used for tags and product copy (no longer for audience collections).
     """
     title = (style.get("title", "") + " " + style.get("styleName", "")).lower()
     desc  = (style.get("description", "") or "").lower()
@@ -268,11 +280,19 @@ def detect_gender(style):
     return "unisex"
 
 def gender_collection_handle(gender):
-    """Map gender to secondary audience collection."""
+    """
+    Audience collections (Men's / Women's / Kids Apparel) are DISABLED.
+    Products now go only to embroidery-all-products + their category collection.
+
+    To re-enable one, uncomment its line below and return the handle:
+        # "mens":   "mens-apparel",     # re-add this line to route Men's items to Men's Apparel
+        # "womens": "womens-apparel",   # intentionally disabled per request
+        # "youth":  "kids-apparel",     # intentionally disabled per request
+    """
     return {
-        "womens": "womens-apparel",
-        "mens":   "mens-apparel",
-        "youth":  "kids-apparel",
+        # "mens":   "mens-apparel",
+        # "womens": "womens-apparel",
+        # "youth":  "kids-apparel",
     }.get(gender, None)
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -725,6 +745,8 @@ def set_metafields(pid, page_title, meta_desc, style, gender, token):
         {"namespace": "custom", "key": "embroidery_ready", "value": "true", "type": "boolean"},
         {"namespace": "custom", "key": "wholesale_brand", "value": brand, "type": "single_line_text_field"},
         {"namespace": "custom", "key": "style_number",    "value": style_name, "type": "single_line_text_field"},
+        # Stash the stable S&S styleID so we always have a durable match key.
+        {"namespace": "custom", "key": "wholesale_style_id", "value": str(style.get("styleID", "")), "type": "single_line_text_field"},
         {"namespace": "custom", "key": "fit_type",        "value": gender, "type": "single_line_text_field"},
         {"namespace": "seo",    "key": "title",           "value": page_title, "type": "single_line_text_field"},
         {"namespace": "seo",    "key": "description",     "value": meta_desc, "type": "single_line_text_field"},
@@ -856,20 +878,38 @@ def create_product_with_retry(payload, token):
     return None
 
 def get_existing_products(token):
-    """Load all existing products with title, status, tags for content detection."""
+    """
+    Load all existing products, indexed BOTH ways:
+      existing  -> keyed by title (legacy fallback)
+      by_sku    -> keyed by every variant SKU (PRIMARY match key)
+
+    Matching on SKU is what stops duplicates: a product's SKUs are stable even
+    when S&S changes its title, so we always find and update the right product
+    instead of creating a second copy.
+    """
     existing = {}
-    params = {"limit": 250, "fields": "id,title,status,tags"}
+    by_sku   = {}
+    fields   = "id,title,status,tags,variants"
+    params   = {"limit": 250, "fields": fields}
     while True:
         r = sh_get("products.json", token, params=params)
+        if r.status_code == 429:
+            time.sleep(10)
+            continue
         if r.status_code != 200:
             break
         for p in r.json().get("products", []):
             tags = p.get("tags", "")
-            existing[p["title"].lower().strip()] = {
+            info = {
                 "id":          p["id"],
                 "status":      p["status"],
                 "content_set": "embroidery-ready" in tags,
             }
+            existing[p["title"].lower().strip()] = info
+            for v in p.get("variants", []):
+                sku = (v.get("sku") or "").strip()
+                if sku:
+                    by_sku[sku] = info
         link = r.headers.get("Link", "")
         if 'rel="next"' not in link:
             break
@@ -881,8 +921,20 @@ def get_existing_products(token):
         pi = qs.get("page_info", [None])[0]
         if not pi:
             break
-        params = {"limit": 250, "fields": "id,title,status,tags", "page_info": pi}
-    return existing
+        params = {"limit": 250, "fields": fields, "page_info": pi}
+    return existing, by_sku
+
+def match_existing_by_sku(skus, by_sku):
+    """
+    Given a style's list of S&S SKU records, return the existing Shopify product
+    info if ANY of those SKUs already lives in the store. This is the check that
+    prevents duplicate creation.
+    """
+    for sku in skus:
+        code = (sku.get("sku") or "").strip()
+        if code and code in by_sku:
+            return by_sku[code]
+    return None
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Main Sync Loop
@@ -935,9 +987,10 @@ def fetch_all_styles_with_skus():
 
 def run():
     print(f"\n{'='*65}")
-    print(f"  Summit Standard Co. — S&S → Shopify Sync (v2)")
+    print(f"  Summit Standard Co. — S&S → Shopify Sync (v2.1)")
     print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"  Mode: {'INITIAL BUILD (active)' if INITIAL_BUILD else 'DAILY SYNC (draft for new)'}")
+    print(f"  Matching: SKU-based (duplicate-proof)")
     print(f"{'='*65}\n")
 
     token = get_shopify_token()
@@ -950,9 +1003,10 @@ def run():
     print(f"  Shop location ID: {location_id}")
 
     print("\n📋 Loading existing products...")
-    existing = get_existing_products(token)
+    existing, existing_by_sku = get_existing_products(token)
     already_set = sum(1 for v in existing.values() if v.get("content_set"))
-    print(f"  {len(existing)} existing products ({already_set} with content set)")
+    print(f"  {len(existing)} existing products, {len(existing_by_sku)} SKUs indexed "
+          f"({already_set} with content set)")
 
     all_styles, sku_cache = fetch_all_styles_with_skus()
 
@@ -960,17 +1014,14 @@ def run():
         print("❌ No styles fetched — check S&S credentials")
         return
 
-    # Sort: new products first, then updates
+    # Sort: new products first, then updates. Existence is decided by SKU now,
+    # not by title, so a drifting title can no longer spawn a duplicate.
     new_styles = []
     upd_styles = []
     for entry in all_styles:
         style, col_tag, tax_key = entry
-        brand      = style.get("brandName", "")
-        style_name = style.get("styleName", "")
-        raw_title  = style.get("title", f"{brand} {style_name}")
-        # Match the title format used in build_payload
-        full_title = raw_title if raw_title.startswith(brand) else f"{brand} {style_name} — {raw_title}"
-        if full_title.lower().strip() in existing:
+        skus = sku_cache.get(style.get("styleID"), [])
+        if match_existing_by_sku(skus, existing_by_sku):
             upd_styles.append(entry)
         else:
             new_styles.append(entry)
@@ -998,6 +1049,7 @@ def run():
         primary_handle = COLLECTION_HANDLE.get(col_tag, "")
         primary_col_id = COLLECTION_IDS.get(primary_handle)
         all_prod_id    = COLLECTION_IDS.get("embroidery-all-products")
+        # Audience collections (Men's/Women's/Kids) are disabled — see gender_collection_handle().
         audience_col_id = COLLECTION_IDS.get(gender_collection_handle(gender) or "")
         tax_gid         = get_taxonomy_gid(style, col_tag, tax_key)
 
@@ -1005,8 +1057,9 @@ def run():
 
         print(f"[{i}/{len(all_styles)}] {brand} {style_name} (fit:{gender})")
 
-        existing_info = existing.get(title.lower().strip())
+        # Decide existence by SKU (title kept only as a last-resort fallback).
         skus = sku_cache.get(style_id, [])
+        existing_info = match_existing_by_sku(skus, existing_by_sku) or existing.get(title.lower().strip())
 
         if existing_info:
             pid = existing_info["id"]
@@ -1076,7 +1129,7 @@ def run():
         new_status = created.get("status", "draft")
         print(f"  ✅ Created (ID {pid}, {new_status})")
 
-        # Collections — primary + all-products + audience
+        # Collections — category + all-products (audience collections disabled)
         if primary_col_id:
             add_to_collection(pid, primary_col_id, token)
             print(f"  📁 {primary_handle}")
@@ -1098,7 +1151,15 @@ def run():
         if publish_to_channels(pid, token):
             print(f"  📢 Published to Online Store, POS, Shop")
 
-        existing[title.lower().strip()] = {"id": pid, "status": new_status, "content_set": True}
+        # Register the new product in BOTH indexes so later styles in this same
+        # run recognize it and never create a second copy.
+        created_info = {"id": pid, "status": new_status, "content_set": True}
+        existing[title.lower().strip()] = created_info
+        for s in skus:
+            code = (s.get("sku") or "").strip()
+            if code:
+                existing_by_sku[code] = created_info
+
         stats["created"] += 1
         time.sleep(0.8)
 
