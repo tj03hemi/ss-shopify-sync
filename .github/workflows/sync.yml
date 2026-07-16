@@ -14,11 +14,13 @@ on:
       keep_rule:
         description: "Which copy to keep in each duplicate group"
         type: choice
-        default: "recent"
+        default: "markup"
         options:
-          - "recent"   # keep the copy still being updated (recommended)
+          - "markup"   # keep the copy with your correct markup (recommended)
+          - "recent"   # keep the most recently updated copy
           - "active"   # prefer an active product, then most recent
           - "oldest"   # keep the original
+          - "highest"  # keep the highest-priced copy
       force:
         description: "Override the safety guard (only if a big delete is expected)"
         type: choice
@@ -52,7 +54,15 @@ jobs:
           EXECUTE:   ${{ github.event.inputs.execute }}
           KEEP_RULE: ${{ github.event.inputs.keep_rule }}
           FORCE:     ${{ github.event.inputs.force }}
-        run: python shopify_dedupe_purge.py
+        run: |
+          FILE="$(find . -name shopify_dedupe_purge.py | head -n1)"
+          if [ -z "$FILE" ]; then
+            echo "Could not find shopify_dedupe_purge.py in the repo."
+            echo "Commit it to the repo (root is easiest) and run again."
+            exit 1
+          fi
+          echo "Running $FILE"
+          python "$FILE"
 
       - name: Upload reports
         if: always()
