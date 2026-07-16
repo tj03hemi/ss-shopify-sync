@@ -1,76 +1,39 @@
-name: Shopify Duplicate Purge
+name: S&S Activewear to Shopify Sync
 
-# Manual trigger only. You pick dry run vs execute from the "Run workflow" button.
 on:
+  schedule:
+    - cron: '0 13 * * *'
   workflow_dispatch:
     inputs:
-      execute:
-        description: "Actually delete? Leave as 'false' for a safe dry run first."
-        type: choice
-        default: "false"
-        options:
-          - "false"
-          - "true"
-      keep_rule:
-        description: "Which copy to keep in each duplicate group"
-        type: choice
-        default: "markup"
-        options:
-          - "markup"   # keep the copy with your correct markup (recommended)
-          - "recent"   # keep the most recently updated copy
-          - "active"   # prefer an active product, then most recent
-          - "oldest"   # keep the original
-          - "highest"  # keep the highest-priced copy
-      force:
-        description: "Override the safety guard (only if a big delete is expected)"
-        type: choice
-        default: "false"
-        options:
-          - "false"
-          - "true"
+      initial_build:
+        description: 'Initial build (creates products as active)'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
-  purge:
+  sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 350
+
     steps:
-      - name: Check out repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
       - name: Install dependencies
         run: pip install requests
 
-      - name: Run purge
+      - name: Run sync
         env:
-          # Reuse the SAME secrets your daily sync uses.
-          # If your sync's secrets are named differently, change the right-hand side.
-          SHOPIFY_STORE:         ${{ secrets.SHOPIFY_STORE }}
-          SHOPIFY_CLIENT_ID:     ${{ secrets.SHOPIFY_CLIENT_ID }}
-          SHOPIFY_CLIENT_SECRET: ${{ secrets.SHOPIFY_CLIENT_SECRET }}
-          EXECUTE:   ${{ github.event.inputs.execute }}
-          KEEP_RULE: ${{ github.event.inputs.keep_rule }}
-          FORCE:     ${{ github.event.inputs.force }}
-        run: |
-          FILE="$(find . -name shopify_dedupe_purge.py | head -n1)"
-          if [ -z "$FILE" ]; then
-            echo "Could not find shopify_dedupe_purge.py in the repo."
-            echo "Commit it to the repo (root is easiest) and run again."
-            exit 1
-          fi
-          echo "Running $FILE"
-          python "$FILE"
-
-      - name: Upload reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: purge-reports
-          path: |
-            duplicate_report.csv
-            to_delete.csv
-            purge_results.csv
-          if-no-files-found: ignore
+          SS_USERNAME:            ${{ secrets.SS_USERNAME }}
+          SS_API_KEY:             ${{ secrets.SS_API_KEY }}
+          SHOPIFY_STORE:          ${{ secrets.SHOPIFY_STORE }}
+          SHOPIFY_CLIENT_ID:      ${{ secrets.SHOPIFY_CLIENT_ID }}
+          SHOPIFY_CLIENT_SECRET:  ${{ secrets.SHOPIFY_CLIENT_SECRET }}
+          INITIAL_BUILD:          ${{ inputs.initial_build }}
+        run: python ss_shopify_sync.py
