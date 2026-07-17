@@ -1,43 +1,39 @@
-name: Collection Cleanup
+name: S&S Activewear to Shopify Sync
 
 on:
+  schedule:
+    - cron: '0 13 * * *'
   workflow_dispatch:
     inputs:
-      execute:
-        description: "Actually remove memberships? Leave 'false' for a dry run first."
-        type: choice
-        default: "false"
-        options:
-          - "false"
-          - "true"
-      target_collections:
-        description: "Collections to empty (comma-separated titles)"
-        type: string
-        default: "Men's Apparel,Women's Apparel,Kids' Apparel"
+      initial_build:
+        description: 'Initial build (creates products as active)'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
-  cleanup:
+  sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 350
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-      - run: pip install requests
-      - name: Run cleanup
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run sync
         env:
-          SHOPIFY_STORE:         ${{ secrets.SHOPIFY_STORE }}
-          SHOPIFY_CLIENT_ID:     ${{ secrets.SHOPIFY_CLIENT_ID }}
-          SHOPIFY_CLIENT_SECRET: ${{ secrets.SHOPIFY_CLIENT_SECRET }}
-          EXECUTE:            ${{ github.event.inputs.execute }}
-          TARGET_COLLECTIONS: ${{ github.event.inputs.target_collections }}
-        run: |
-          FILE="$(find . -name collection_cleanup.py | head -n1)"
-          python "$FILE"
-      - name: Upload report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: collection-cleanup
-          path: collection_cleanup.csv
-          if-no-files-found: ignore
+          SS_USERNAME:            ${{ secrets.SS_USERNAME }}
+          SS_API_KEY:             ${{ secrets.SS_API_KEY }}
+          SHOPIFY_STORE:          ${{ secrets.SHOPIFY_STORE }}
+          SHOPIFY_CLIENT_ID:      ${{ secrets.SHOPIFY_CLIENT_ID }}
+          SHOPIFY_CLIENT_SECRET:  ${{ secrets.SHOPIFY_CLIENT_SECRET }}
+          INITIAL_BUILD:          ${{ inputs.initial_build }}
+        run: python ss_shopify_sync.py
