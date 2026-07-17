@@ -1,15 +1,22 @@
-name: Collection Audit
+name: Collection Cleanup
 
 on:
   workflow_dispatch:
     inputs:
-      cutoff:
-        description: "Deploy date to split before/after (YYYY-MM-DD), optional"
+      execute:
+        description: "Actually remove memberships? Leave 'false' for a dry run first."
+        type: choice
+        default: "false"
+        options:
+          - "false"
+          - "true"
+      target_collections:
+        description: "Collections to empty (comma-separated titles)"
         type: string
-        default: ""
+        default: "Men's Apparel,Women's Apparel,Kids' Apparel"
 
 jobs:
-  audit:
+  cleanup:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,19 +24,20 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install requests
-      - name: Run audit
+      - name: Run cleanup
         env:
           SHOPIFY_STORE:         ${{ secrets.SHOPIFY_STORE }}
           SHOPIFY_CLIENT_ID:     ${{ secrets.SHOPIFY_CLIENT_ID }}
           SHOPIFY_CLIENT_SECRET: ${{ secrets.SHOPIFY_CLIENT_SECRET }}
-          CUTOFF:                ${{ github.event.inputs.cutoff }}
+          EXECUTE:            ${{ github.event.inputs.execute }}
+          TARGET_COLLECTIONS: ${{ github.event.inputs.target_collections }}
         run: |
-          FILE="$(find . -name collections_audit.py | head -n1)"
+          FILE="$(find . -name collection_cleanup.py | head -n1)"
           python "$FILE"
       - name: Upload report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: collection-audit
-          path: collection_audit.csv
+          name: collection-cleanup
+          path: collection_cleanup.csv
           if-no-files-found: ignore
