@@ -1,39 +1,35 @@
-name: S&S Activewear to Shopify Sync
+name: Collection Audit
 
 on:
-  schedule:
-    - cron: '0 13 * * *'
   workflow_dispatch:
     inputs:
-      initial_build:
-        description: 'Initial build (creates products as active)'
-        required: false
-        type: boolean
-        default: false
+      cutoff:
+        description: "Deploy date to split before/after (YYYY-MM-DD), optional"
+        type: string
+        default: ""
 
 jobs:
-  sync:
+  audit:
     runs-on: ubuntu-latest
-    timeout-minutes: 350
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: pip install requests
-
-      - name: Run sync
+          python-version: "3.11"
+      - run: pip install requests
+      - name: Run audit
         env:
-          SS_USERNAME:            ${{ secrets.SS_USERNAME }}
-          SS_API_KEY:             ${{ secrets.SS_API_KEY }}
-          SHOPIFY_STORE:          ${{ secrets.SHOPIFY_STORE }}
-          SHOPIFY_CLIENT_ID:      ${{ secrets.SHOPIFY_CLIENT_ID }}
-          SHOPIFY_CLIENT_SECRET:  ${{ secrets.SHOPIFY_CLIENT_SECRET }}
-          INITIAL_BUILD:          ${{ inputs.initial_build }}
-        run: python ss_shopify_sync.py
+          SHOPIFY_STORE:         ${{ secrets.SHOPIFY_STORE }}
+          SHOPIFY_CLIENT_ID:     ${{ secrets.SHOPIFY_CLIENT_ID }}
+          SHOPIFY_CLIENT_SECRET: ${{ secrets.SHOPIFY_CLIENT_SECRET }}
+          CUTOFF:                ${{ github.event.inputs.cutoff }}
+        run: |
+          FILE="$(find . -name collections_audit.py | head -n1)"
+          python "$FILE"
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: collection-audit
+          path: collection_audit.csv
+          if-no-files-found: ignore
